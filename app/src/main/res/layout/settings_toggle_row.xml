@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Reusable toggle row for boolean settings (label + subtitle + on/off readout).
+
+     The SwitchCompat is kept in the tree but hidden: SettingsFragment reads and
+     writes switch_setting.isChecked, so removing it would break that binding.
+     What the user actually sees is text_setting_value ([ ON ] / [ OFF ]) — a
+     sliding thumb is the wrong vocabulary for this UI, and a mono readout is far
+     easier to parse across a room than a small track. SettingsFragment mirrors
+     the switch state into that label. -->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="72dp"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:background="@drawable/focus_ring_selector"
+    android:focusable="true">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/text_setting_label"
+            style="@style/Ferry.Text.Heading"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="16sp"
+            android:textColor="@color/cell_text_primary"
+            android:duplicateParentState="true" />
+
+        <TextView
+            android:id="@+id/text_setting_subtitle"
+            style="@style/Ferry.Text.Caption"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:visibility="gone"
+            android:textColor="@color/cell_text_tertiary"
+            android:duplicateParentState="true" />
+
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/text_setting_value"
+        style="@style/Ferry.Text.Heading"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="15sp"
+        android:textColor="@color/cell_text_primary"
+        android:duplicateParentState="true" />
+
+    <androidx.appcompat.widget.SwitchCompat
+        android:id="@+id/switch_setting"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:focusable="false"
+        android:clickable="false" />
+
+</LinearLayout>

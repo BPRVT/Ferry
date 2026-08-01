@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    nav_item_text.xml — rail item label.
+
+    Three states matching nav_item_selector's three fills. Because this is a
+    ColorStateList, MainActivity only has to set View.isSelected; it must NOT also
+    call setTextColor, which would pin the colour and break the focused state.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true" android:color="@color/text_on_accent" />
+    <item android:state_selected="true" android:color="@color/text_primary" />
+    <item android:color="@color/nav_item_normal" />
+</selector>

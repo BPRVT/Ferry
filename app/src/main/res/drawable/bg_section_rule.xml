@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    bg_section_rule.xml — a single hairline along the TOP edge of a view.
+
+    Built as a layer-list with the fill inset by 1dp from the top, which is the
+    standard way to get a one-sided border out of a shape drawable: the accent
+    rectangle underneath is covered everywhere except the exposed 1dp strip.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/divider" />
+        </shape>
+    </item>
+    <item android:top="1dp">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/background_dark" />
+        </shape>
+    </item>
+</layer-list>

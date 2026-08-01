@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    screen_waiting.xml — idle screen. Shown full-frame on the TV while Ferry waits
+    for a sender, so it is the screen people look at longest.
+
+              FERRY
+              ══════════════════
+
+              THIS DEVICE
+              Living-Room-TV        ← accent, the one hot element on screen
+
+              ─────────────────────
+              OPEN AIRPLAY ON YOUR MAC AND SELECT THIS DEVICE
+
+    Left-aligned rather than centred: centred mono type reads as a splash screen,
+    left-aligned reads as a terminal, which is the intent. The block is centred as
+    a whole via the guideline pair so it still sits in the optical middle.
+
+    Overscan: 48dp padding is not enough on older TVs that crop ~5%. The outer
+    padding here is 64dp, which clears the worst offenders.
+-->
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background_dark"
+    android:padding="64dp">
+
+    <!-- Everything is chained vertically inside this centred block -->
+    <TextView
+        android:id="@+id/text_app_name"
+        style="@style/Ferry.Text.Display"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="52sp"
+        android:text="@string/app_name"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/rule_top"
+        app:layout_constraintVertical_chainStyle="packed" />
+
+    <View
+        android:id="@+id/rule_top"
+        android:layout_width="0dp"
+        android:layout_height="3dp"
+        android:layout_marginTop="20dp"
+        android:background="@color/accent_blue"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/text_app_name"
+        app:layout_constraintBottom_toTopOf="@id/text_device_label" />
+
+    <TextView
+        android:id="@+id/text_device_label"
+        style="@style/Ferry.Text.Section"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="48dp"
+        android:textColor="@color/text_secondary"
+        android:text="@string/waiting_device_label"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/rule_top"
+        app:layout_constraintBottom_toTopOf="@id/text_device_name" />
+
+    <!-- The device's AirPlay name — populated by WaitingScreen.kt -->
+    <TextView
+        android:id="@+id/text_device_name"
+        style="@style/Ferry.TextView"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:textColor="@color/accent_blue"
+        android:textSize="40sp"
+        android:textStyle="bold"
+        android:maxLines="2"
+        android:ellipsize="end"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/text_device_label"
+        app:layout_constraintBottom_toTopOf="@id/rule_bottom" />
+
+    <View
+        android:id="@+id/rule_bottom"
+        android:layout_width="0dp"
+        android:layout_height="1dp"
+        android:layout_marginTop="48dp"
+        android:background="@color/divider"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/text_device_name"
+        app:layout_constraintBottom_toTopOf="@id/text_subtitle" />
+
+    <TextView
+        android:id="@+id/text_subtitle"
+        style="@style/Ferry.Text.Body"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:textSize="18sp"
+        android:letterSpacing="0.08"
+        android:textAllCaps="true"
+        android:text="@string/waiting_subtitle"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/rule_bottom"
+        app:layout_constraintBottom_toBottomOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    fragment_home.xml — HomeFragment.
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │ READY FOR CONNECTIONS                        ▐ RUNNING       │
+    │ VISIBLE AS: LIVING-ROOM-TV                                   │
+    │ ════════════════════════════════════════════════════════════ │
+    │                                                              │
+    │ PROTOCOLS ─────────────────────────────────────────────────  │
+    │ ┌────────────┐┌────────────┐┌────────────┐                   │
+    │ │    AIRPLAY ││   MIRACAST ││       CAST │                   │
+    │ └────────────┘└────────────┘└────────────┘                   │
+    │                                                              │
+    │ SERVICE CONTROL ───────────────────────────────────────────  │
+    │ [  START  ][  STOP  ][ RESTART ]                             │
+    └──────────────────────────────────────────────────────────────┘
+
+    Section labels sit on a rule that runs to the right edge — the rules, not
+    boxes or spacing, are what separate regions in this design.
+
+    Cells are butted directly against each other (no gaps) so the 1dp borders
+    form a continuous grid, which is why the row uses no item margins.
+-->
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background_dark"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="40dp"
+        android:paddingEnd="40dp"
+        android:paddingTop="40dp"
+        android:paddingBottom="40dp">
+
+        <!-- ── Header ──────────────────────────────────────────────────── -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:orientation="horizontal"
+            android:gravity="top">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/text_page_title"
+                    style="@style/Ferry.Text.Display"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/home_title" />
+
+                <TextView
+                    android:id="@+id/text_device_name"
+                    style="@style/Ferry.Text.Body"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:letterSpacing="0.06"
+                    android:textAllCaps="true" />
+            </LinearLayout>
+
+            <!-- Global service state. Not focusable — it is a readout, not a
+                 control, so it gets a plain outline rather than a cell. -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/bg_readout"
+                android:paddingStart="14dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <View
+                    android:id="@+id/dot_service_state"
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:layout_marginEnd="10dp"
+                    android:background="@drawable/status_dot" />
+
+                <TextView
+                    android:id="@+id/text_service_state"
+                    style="@style/Ferry.Text.Body"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:letterSpacing="0.1"
+                    android:textAllCaps="true"
+                    android:text="@string/service_state_stopped" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Heavy rule closing the header -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="36dp"
+            android:background="@color/divider" />
+
+        <!-- ── Section: protocols ──────────────────────────────────────── -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="16dp">
+
+            <TextView
+                style="@style/Ferry.Text.Section"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="16dp"
+                android:text="@string/section_protocols" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1"
+                android:background="@color/divider" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/protocol_cards_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:orientation="horizontal"
+            android:layout_marginBottom="40dp">
+
+            <include
+                android:id="@+id/card_airplay"
+                layout="@layout/card_protocol_status"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+
+            <include
+                android:id="@+id/card_miracast"
+                layout="@layout/card_protocol_status"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+
+            <include
+                android:id="@+id/card_cast"
+                layout="@layout/card_protocol_status"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+
+        </LinearLayout>
+
+        <!-- ── Section: service control ────────────────────────────────── -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="16dp">
+
+            <TextView
+                style="@style/Ferry.Text.Section"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="16dp"
+                android:text="@string/section_controls" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1"
+                android:background="@color/divider" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_start"
+                android:layout_width="wrap_content"
+                android:layout_height="56dp"
+                android:layout_marginEnd="12dp"
+                android:minWidth="150dp"
+                android:paddingStart="28dp"
+                android:paddingEnd="28dp"
+                android:text="@string/action_start"
+                android:textColor="@color/cell_text_primary"
+                android:textSize="16sp"
+                android:background="@drawable/btn_control_selector"
+                android:focusable="true"
+                android:nextFocusRight="@id/btn_stop" />
+
+            <Button
+                android:id="@+id/btn_stop"
+                android:layout_width="wrap_content"
+                android:layout_height="56dp"
+                android:layout_marginEnd="12dp"
+                android:minWidth="150dp"
+                android:paddingStart="28dp"
+                android:paddingEnd="28dp"
+                android:text="@string/action_stop"
+                android:textColor="@color/cell_text_primary"
+                android:textSize="16sp"
+                android:background="@drawable/btn_control_selector"
+                android:focusable="true"
+                android:nextFocusLeft="@id/btn_start"
+                android:nextFocusRight="@id/btn_restart" />
+
+            <Button
+                android:id="@+id/btn_restart"
+                android:layout_width="wrap_content"
+                android:layout_height="56dp"
+                android:minWidth="150dp"
+                android:paddingStart="28dp"
+                android:paddingEnd="28dp"
+                android:text="@string/action_restart"
+                android:textColor="@color/cell_text_primary"
+                android:textSize="16sp"
+                android:background="@drawable/btn_control_selector"
+                android:focusable="true"
+                android:nextFocusLeft="@id/btn_stop" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

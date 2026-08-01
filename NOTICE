@@ -1,0 +1,147 @@
+Ferry — an AirPlay-compatible screen mirroring receiver for Fire TV / Android TV
+Copyright (C) 2026 Ferry contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.
+
+================================================================================
+PROVENANCE — where this code came from
+================================================================================
+
+Ferry is a derivative work. It is not an original implementation of the AirPlay
+protocol, and this file records the full chain it descends from. Nothing here is
+optional attribution: each link below is a licensing obligation.
+
+1. mazer666/PhairPlay
+   <https://github.com/mazer666/PhairPlay>
+
+   Ferry is derived directly from PhairPlay, an AirPlay 2 receiver for Android TV
+   and Fire TV. The Kotlin application — RTSP handling, the AirPlay 2 handshake,
+   mDNS advertisement, the MediaCodec video pipeline, the service architecture,
+   and the TV user interface — originates there. PhairPlay's repository declared
+   the Apache License 2.0.
+
+   See LICENSING NOTE below regarding that declaration.
+
+2. FDH2/UxPlay  and  FD-/RPiPlay
+   <https://github.com/FDH2/UxPlay>
+   <https://github.com/FD-/RPiPlay>
+
+   PhairPlay's AirPlay implementation derives from UxPlay, which derives in turn
+   from RPiPlay. The FairPlay key-decryption code in app/src/main/cpp/playfair/
+   reached Ferry through RPiPlay's lib/playfair. RPiPlay is licensed under the GNU
+   General Public License version 3.
+
+   Both RPiPlay and UxPlay ship byte-identical copies of these files; Ferry's
+   copies of playfair.c, playfair.h, omg_hax.c, omg_hax.h and hand_garble.c are
+   byte-for-byte identical to that upstream. modified_md5.c and sap_hash.c carry
+   small portability fixes (strict-aliasing and unaligned-access corrections)
+   inherited from PhairPlay; see AUDIT.md for the complete diff.
+
+3. EstebanKubata/playfair
+   <https://github.com/EstebanKubata/playfair>
+
+   The original FairPlay implementation. RPiPlay's README credits its lib/playfair
+   directory to this project, and EstebanKubata/playfair is licensed GPLv3.
+
+   This is the root of the GPL obligation that determines Ferry's license: the
+   FairPlay code is GPLv3 at its origin, and every project that redistributed it
+   downstream (RPiPlay, UxPlay) is likewise GPLv3.
+
+4. openairplay/airplay-spec
+   <https://github.com/openairplay/airplay-spec>
+
+   Protocol documentation for AirPlay and AirPlay 2 — the reverse-engineered
+   description of the RTSP handshake, pairing, and stream formats that these
+   implementations are built against.
+
+5. Apple Inc. — Apple Lossless Audio Codec (ALAC)
+   <https://github.com/macosforge/alac>
+
+   The decoder in app/src/main/cpp/alac/ is Apple's own open-source ALAC
+   implementation, licensed under the Apache License, Version 2.0:
+
+       Copyright (C) 2011 Apple Inc. All Rights Reserved.
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+           http://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+
+   Apple's copyright and license headers in those files are preserved verbatim
+   and must not be removed or altered. Apache 2.0 files retain their own notices
+   even when combined into a GPLv3-licensed whole.
+
+================================================================================
+LICENSING NOTE — why Ferry is GPLv3 and its upstream said Apache 2.0
+================================================================================
+
+PhairPlay's repository declared the Apache License 2.0. That declaration does not
+cover all of the code actually being distributed.
+
+The files in app/src/main/cpp/playfair/ carry no license header at all. They are
+identifiable by filename and content as the playfair / RPiPlay lineage, and both
+EstebanKubata/playfair and RPiPlay are licensed GPLv3. GPL-licensed code was
+therefore incorporated into a repository declaring Apache 2.0.
+
+One point of fact worth recording precisely, because it is easy to assume
+otherwise: **PhairPlay did not strip these headers.** RPiPlay's own copies of
+these files carry no license header either — the omission exists at RPiPlay and
+was inherited downstream, not introduced by PhairPlay. RPiPlay conveys the license
+at the project level, via its LICENSE file (GPLv3) and a README that credits
+lib/playfair to EstebanKubata's PlayFair under the GNU GPL.
+
+That makes PhairPlay's Apache 2.0 declaration look like carelessness rather than
+bad faith: the code is unmodified apart from portability fixes, openly named after
+its origin, and the project's own CMakeLists.txt describes it as "RPiPlay's
+FairPlay (playfair) implementation". Nothing was concealed. But the effect is the
+same regardless of intent — the Apache 2.0 claim did not cover the distributed
+work, because a project-level GPLv3 license binds the files inside it whether or
+not each file repeats the notice.
+
+Ferry is licensed GPLv3, which is the license the combined work has to carry:
+
+  - GPLv3 is compatible with Apache 2.0 in one direction only. Apache-2.0-licensed
+    code (Apple's ALAC) may be incorporated into a GPLv3 work. The reverse does not
+    hold — GPLv3 code cannot be relicensed under Apache 2.0.
+  - Because the playfair sources are GPLv3, any work distributing them must be
+    GPLv3. There is no combination of these components that is validly Apache 2.0.
+
+Ferry additionally adds the GPLv3 headers that were missing from the playfair
+files, naming RPiPlay as their origin. That corrects upstream's omission rather
+than propagating it.
+
+This is a good-faith reading of the license situation by the Ferry authors, based
+on the provenance of the filenames and the byte-level match against RPiPlay
+documented in AUDIT.md. It is not legal advice. If you intend to redistribute
+Ferry commercially, or in any context where the licensing has real consequences
+for you, get an actual lawyer to review it — the upstream chain involves
+reverse-engineered code and an unresolved header omission, and that is not a
+question source review can settle.
+
+================================================================================
+TRADEMARKS
+================================================================================
+
+AirPlay, Apple, and macOS are trademarks of Apple Inc. Ferry is not affiliated
+with, authorized by, endorsed by, or sponsored by Apple Inc.
+
+Ferry implements a protocol that is compatible with AirPlay. It deliberately does
+not use "AirPlay" in its application name, package identifier, repository name,
+launcher label, or advertised network service name.

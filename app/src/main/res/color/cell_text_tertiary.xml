@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Detail/caption text inside an invertible cell. See cell_text_primary.xml —
+     needs android:duplicateParentState="true" on the TextView. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true" android:color="@color/text_on_accent_muted" />
+    <item android:state_pressed="true" android:color="@color/text_on_accent_muted" />
+    <item android:color="@color/text_tertiary" />
+</selector>

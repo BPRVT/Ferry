@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    focus_ring_selector.xml — the focus treatment for every interactive cell.
+
+    Brutalist rule: focus INVERTS the cell (solid accent fill) instead of drawing a
+    ring around it. Zero corner radius throughout — one rounded corner in this UI
+    makes every hard edge next to it look like a mistake.
+
+    IMPORTANT: a view using this as its background must also flip its text colour on
+    focus, or white-on-accent text drops to ~1.4:1 and is unreadable. Inversion is
+    wired up centrally by FocusInversion.apply() — use it for any new cell.
+
+    Usage:  android:background="@drawable/focus_ring_selector"
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Focused: solid accent block. No radius, no stroke, no animation. -->
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/accent_blue" />
+        </shape>
+    </item>
+
+    <!-- Pressed without focus (touch, or remote select): darker accent -->
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/accent_blue_pressed" />
+        </shape>
+    </item>
+
+    <!-- Rest: dark fill with a hairline outline. The outline is what makes the
+         grid legible at rest; without it the cells dissolve into the ground. -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/background_surface" />
+            <stroke android:width="1dp" android:color="@color/border_idle" />
+        </shape>
+    </item>
+
+</selector>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Label on a destructive row: red at rest, near-black once the row inverts to
+     red on focus. Needs android:duplicateParentState="true" on the TextView. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true" android:color="@color/text_on_accent" />
+    <item android:state_pressed="true" android:color="@color/text_on_accent" />
+    <item android:color="@color/status_stopped" />
+</selector>

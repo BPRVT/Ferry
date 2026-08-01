@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    cell_text_primary.xml — heading text inside an invertible cell.
+
+    Pairs with focus_ring_selector: when the cell fills with accent, text flips to
+    near-black. Doing this as a ColorStateList rather than in a focus listener means
+    a new cell gets correct contrast for free — there is no listener to forget.
+
+    REQUIRES android:duplicateParentState="true" on the TextView, because the state
+    that changes is the parent cell's focus, not the TextView's own.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true" android:color="@color/text_on_accent" />
+    <item android:state_pressed="true" android:color="@color/text_on_accent" />
+    <item android:color="@color/text_primary" />
+</selector>

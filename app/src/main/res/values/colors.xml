@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    colors.xml — Ferry's palette.
+
+    Design language: brutalist mono. Near-black ground, one hot accent, hard edges,
+    no elevation and no soft shadows. Focus is communicated by INVERSION (accent fill,
+    black text) rather than by a glow or a tinted card, because on a TV seen from three
+    metres a full block of colour reads instantly where a 3dp ring does not.
+
+    Names are load-bearing: several are referenced from Kotlin (HomeFragment,
+    PinScreen, NowPlayingScreen, StreamingScreen). Renaming one means updating those.
+-->
+<resources>
+
+    <!-- ─── Ground ───────────────────────────────────────────────
+         Not pure #000: a near-black lets the 1px borders that carry
+         the whole design read as deliberate rather than as panel seams. -->
+    <color name="background_dark">#FF0A0A0A</color>
+    <!-- Cell fill, one step up from ground -->
+    <color name="background_surface">#FF161616</color>
+    <!-- Second step, for a cell sitting on top of a filled panel -->
+    <color name="background_surface_elevated">#FF1F1F1F</color>
+    <!-- Hairlines. These are the primary structural element of the UI. -->
+    <color name="divider">#FF2E2E2E</color>
+    <!-- Brighter hairline: the outline of an interactive cell at rest -->
+    <color name="border_idle">#FF3D3D3D</color>
+
+    <!-- ─── Text ─────────────────────────────────────────────────
+         Three steps only. Anything that wants a fourth wants a border instead. -->
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_secondary">#FF8A8A8A</color>
+    <color name="text_tertiary">#FF5A5A5A</color>
+    <!-- Text sitting ON the accent when a cell is focused and inverted -->
+    <color name="text_on_accent">#FF0A0A0A</color>
+    <!-- Demoted text on the accent. Alpha rather than a lighter ink, so it stays
+         correct if the accent hue ever changes. ~7:1 on the accent. -->
+    <color name="text_on_accent_muted">#B00A0A0A</color>
+
+    <!-- ─── Accent — terminal green ──────────────────────────────
+         NOTE: the name still says "blue" because it is referenced by that
+         name from themes.xml and several layouts; the value is simply
+         "the accent", whatever hue it happens to be. Renaming it is a
+         mechanical find-and-replace if that ever becomes worth doing. -->
+    <color name="accent_blue">#FF00E5A0</color>
+    <color name="accent_blue_pressed">#FF00B27C</color>
+    <!-- Low-alpha accent: resting fill of a selected-but-unfocused cell -->
+    <color name="accent_wash">#2200E5A0</color>
+    <!-- The same wash pre-composited over the ground. Needed wherever the wash
+         sits in a layer-list above an opaque accent (see nav_item_selector). -->
+    <color name="accent_wash_opaque">#FF09261D</color>
+    <color name="focus_ring">#FF00E5A0</color>
+
+    <!-- ─── Status ───────────────────────────────────────────────
+         Kept saturated: in this UI they render as solid blocks, not as
+         small dots, so they carry further across a room. -->
+    <color name="status_running">#FF00E5A0</color>
+    <color name="status_stopped">#FFFF4D2E</color>
+    <color name="status_disabled">#FF5A5A5A</color>
+    <color name="status_transitioning">#FFFFB020</color>
+
+    <!-- ─── Protocol marks ───────────────────────────────────────
+         Deliberately NOT each vendor's brand colour — vendor blues drag the
+         palette straight back toward the Google TV look this replaces.
+         Three steps that stay distinguishable when dimmed to 50%. -->
+    <color name="protocol_airplay">#FF00E5A0</color>
+    <color name="protocol_miracast">#FF7AA2F7</color>
+    <color name="protocol_cast">#FFBB9AF7</color>
+
+    <!-- ─── Navigation rail ──────────────────────────────────────
+         Ground-coloured and separated by a hairline rather than by its own
+         fill; the only colour in the rail is the focused item. -->
+    <color name="nav_panel_background">#FF0A0A0A</color>
+    <color name="nav_item_selected">#FF00E5A0</color>
+    <color name="nav_item_normal">#FF8A8A8A</color>
+
+</resources>

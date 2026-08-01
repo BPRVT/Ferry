@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    card_protocol_status.xml — one protocol cell (AirPlay / Miracast / Cast).
+
+    ┌──────────────────────────┐
+    │ [icon]            AIRPLAY│   ← icon left, name right-aligned
+    │                          │
+    │ ▐ ADVERTISING            │   ← status block + state
+    │ Waiting for sender…      │   ← detail line
+    └──────────────────────────┘
+       1dp border at rest → solid accent block when focused
+
+    Every text view here sets duplicateParentState="true" so the cell_text_*
+    ColorStateLists can flip ink to near-black on focus. Drop that attribute and
+    the label turns white-on-green and becomes unreadable.
+
+    ids are load-bearing: HomeFragment.updateProtocolCell() resolves
+    dot_protocol_status / text_protocol_state / text_protocol_detail by id.
+-->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp"
+    android:background="@drawable/focus_ring_selector"
+    android:focusable="true">
+
+    <!-- Header row: icon pinned left, protocol name pinned right.
+
+         UseCompoundDrawables is suppressed rather than applied: a drawableStart on
+         the TextView would sit immediately beside the text, but the design pushes
+         the icon and the name to opposite ends of the cell (the weighted TextView
+         is what creates that gap). The quickfix would silently change the layout. -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:baselineAligned="false"
+        android:layout_marginBottom="28dp"
+        tools:ignore="UseCompoundDrawables">
+
+        <ImageView
+            android:id="@+id/img_protocol_icon"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:src="@drawable/ic_airplay"
+            android:duplicateParentState="true"
+            android:importantForAccessibility="no" />
+
+        <TextView
+            android:id="@+id/text_protocol_name"
+            style="@style/Ferry.Text.Heading"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="end"
+            android:textSize="17sp"
+            android:textColor="@color/cell_text_primary"
+            android:duplicateParentState="true" />
+    </LinearLayout>
+
+    <!-- Status row: block + state label -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <View
+            android:id="@+id/dot_protocol_status"
+            android:layout_width="12dp"
+            android:layout_height="12dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/status_dot"
+            android:duplicateParentState="true" />
+
+        <TextView
+            android:id="@+id/text_protocol_state"
+            style="@style/Ferry.Text.Body"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="14sp"
+            android:letterSpacing="0.1"
+            android:textAllCaps="true"
+            android:textColor="@color/cell_text_secondary"
+            android:duplicateParentState="true" />
+    </LinearLayout>
+
+    <!-- Detail: sender name when connected, hint when idle -->
+    <TextView
+        android:id="@+id/text_protocol_detail"
+        style="@style/Ferry.Text.Caption"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textColor="@color/cell_text_tertiary"
+        android:duplicateParentState="true" />
+
+</LinearLayout>

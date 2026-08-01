@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    status_dot.xml — status indicator.
+
+    A square block, not a circle: the only curve left in this UI would otherwise be
+    here, and at TV distance a filled block also carries further than a 12dp dot.
+    Tinted at runtime (HomeFragment.updateProtocolCell) — callers must mutate() the
+    drawable first, or all three protocol cells will share one tint.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <size android:width="14dp" android:height="14dp" />
+    <solid android:color="@color/status_disabled" />
+</shape>

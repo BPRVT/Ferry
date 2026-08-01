@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    fragment_settings.xml — Settings screen layout.
+
+    Organized into sections matching the AppSettings data model:
+    1. Display — device name shown in pickers
+    2. Protocols — enable/disable AirPlay, Miracast, Cast
+    3. AirPlay — PIN authentication
+    4. Service — start on boot
+    5. Developer — debug overlay
+    6. About — version info, reset
+-->
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background_dark"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="40dp"
+        android:paddingEnd="40dp"
+        android:paddingTop="40dp"
+        android:paddingBottom="40dp">
+
+        <!-- Page title, closed by the same heavy rule used on Home -->
+        <TextView
+            style="@style/Ferry.Text.Display"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/nav_settings" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="8dp"
+            android:background="@color/divider" />
+
+        <!-- ── Section: Display ────────────────────────────────── -->
+        <include layout="@layout/settings_section_header"
+            android:id="@+id/header_display" />
+
+        <!-- Display name row -->
+        <LinearLayout
+            android:id="@+id/row_display_name"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="16dp"
+            android:background="@drawable/focus_ring_selector"
+            android:focusable="true">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    style="@style/Ferry.Text.Heading"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/setting_display_name"
+                    android:textSize="16sp"
+                    android:textColor="@color/cell_text_primary"
+                    android:duplicateParentState="true" />
+
+                <TextView
+                    android:id="@+id/text_display_name_value"
+                    style="@style/Ferry.Text.Caption"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="@color/cell_text_tertiary"
+                    android:duplicateParentState="true" />
+            </LinearLayout>
+
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@drawable/ic_chevron_right"
+                android:duplicateParentState="true"
+                android:importantForAccessibility="no" />
+        </LinearLayout>
+
+        <!-- Force higher mirroring resolution (1440p) -->
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_force_high_res" />
+
+        <!-- ── Section: Protocols ─────────────────────────────── -->
+        <include layout="@layout/settings_section_header"
+            android:id="@+id/header_protocols"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" />
+
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_airplay"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_miracast"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_cast"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <!-- ── Section: AirPlay ───────────────────────────────── -->
+        <include layout="@layout/settings_section_header"
+            android:id="@+id/header_airplay"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" />
+
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_mirror_audio"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_pin_auth"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <!-- ── Section: Service ───────────────────────────────── -->
+        <include layout="@layout/settings_section_header"
+            android:id="@+id/header_service"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" />
+
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_start_on_boot"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <!-- ── Section: Developer ─────────────────────────────── -->
+        <include layout="@layout/settings_section_header"
+            android:id="@+id/header_developer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" />
+
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_debug_overlay"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <!-- ── Section: About ─────────────────────────────────── -->
+        <include layout="@layout/settings_section_header"
+            android:id="@+id/header_about"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp" />
+
+        <LinearLayout
+            android:id="@+id/row_version"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:background="@drawable/bg_readout"
+            android:focusable="false">
+
+            <TextView
+                style="@style/Ferry.Text.Heading"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/setting_version"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/text_version_value"
+                style="@style/Ferry.Text.Body"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/row_reset"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="8dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:background="@drawable/bg_destructive_selector"
+            android:focusable="true">
+
+            <TextView
+                style="@style/Ferry.Text.Heading"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/setting_reset_defaults"
+                android:textSize="16sp"
+                android:textColor="@color/cell_text_destructive"
+                android:duplicateParentState="true" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

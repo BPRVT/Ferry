@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Theme.Ferry — brutalist mono TV theme.
+
+        Type is monospace everywhere. This uses the platform "monospace" family
+        rather than a bundled font file on purpose: every Android TV and Fire OS
+        build ships one (Droid Sans Mono / Roboto Mono), so we get the look with
+        no APK weight, no font licence to carry in NOTICE, and no fallback risk
+        on the older Fire OS builds Ferry targets.
+
+        Global textViewStyle/buttonStyle overrides mean layouts do not have to
+        repeat android:fontFamily on every view; programmatically-built screens
+        (PinScreen, NowPlayingScreen) set the typeface themselves, since a code-
+        constructed TextView does not pick up textViewStyle from the theme.
+    -->
+    <style name="Theme.Ferry" parent="@style/Theme.AppCompat.Leanback">
+        <item name="android:windowBackground">@color/background_dark</item>
+        <item name="android:colorPrimary">@color/accent_blue</item>
+        <item name="android:colorPrimaryDark">@color/background_dark</item>
+        <item name="android:colorAccent">@color/accent_blue</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:statusBarColor">@color/background_dark</item>
+        <item name="android:navigationBarColor">@color/background_dark</item>
+
+        <!-- Mono everywhere, and no cross-fade on state changes: focus should
+             snap between cells, not animate. Animation reads as "soft" here. -->
+        <item name="android:textViewStyle">@style/Ferry.TextView</item>
+        <item name="android:buttonStyle">@style/Ferry.Button</item>
+    </style>
+
+    <!-- Fullscreen theme: hides status bar for StreamingScreen -->
+    <style name="Theme.Ferry.Fullscreen" parent="Theme.Ferry">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+
+    <!-- ─── Base widget styles ──────────────────────────────────────── -->
+
+    <style name="Ferry.TextView" parent="android:Widget.TextView">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textColor">@color/text_primary</item>
+    </style>
+
+    <style name="Ferry.Button" parent="Widget.AppCompat.Button">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <!-- ─── Type scale ──────────────────────────────────────────────────
+         Five steps. Mono at large sizes is wide, so the display step is
+         smaller than its sans equivalent would be and leans on weight and
+         letter-spacing instead of size to establish hierarchy. -->
+
+    <!-- Screen title: "FERRY", "SETTINGS" -->
+    <style name="Ferry.Text.Display" parent="Ferry.TextView">
+        <item name="android:textSize">34sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.14</item>
+        <item name="android:textAllCaps">true</item>
+    </style>
+
+    <!-- Cell heading: protocol name, setting label -->
+    <style name="Ferry.Text.Heading" parent="Ferry.TextView">
+        <item name="android:textSize">19sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.06</item>
+        <item name="android:textAllCaps">true</item>
+    </style>
+
+    <!-- Section rule label: "PROTOCOLS", "SERVICE CONTROL" -->
+    <style name="Ferry.Text.Section" parent="Ferry.TextView">
+        <item name="android:textSize">13sp</item>
+        <item name="android:textColor">@color/accent_blue</item>
+        <item name="android:letterSpacing">0.22</item>
+        <item name="android:textAllCaps">true</item>
+    </style>
+
+    <!-- Body / value text -->
+    <style name="Ferry.Text.Body" parent="Ferry.TextView">
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">@color/text_secondary</item>
+    </style>
+
+    <!-- Caption: detail lines, hints, subtitles -->
+    <style name="Ferry.Text.Caption" parent="Ferry.TextView">
+        <item name="android:textSize">13sp</item>
+        <item name="android:textColor">@color/text_tertiary</item>
+    </style>
+</resources>

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    btn_control_selector.xml — Start / Stop / Restart.
+
+    Same inversion rule as focus_ring_selector, but buttons carry a heavier 2dp
+    outline at rest so they read as pressable next to the 1dp status cells.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/accent_blue" />
+        </shape>
+    </item>
+
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/accent_blue_pressed" />
+        </shape>
+    </item>
+
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/background_dark" />
+            <stroke android:width="2dp" android:color="@color/text_secondary" />
+        </shape>
+    </item>
+
+</selector>
