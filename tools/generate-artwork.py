@@ -86,9 +86,9 @@ def ferry(d, cx, cy, scale, porthole_fill=ACCENT):
         d.rectangle([px - r, py - r, px + r, py + r], fill=porthole_fill)
 
 
-def make_banner(path, w=1280, h=720):
+def make_banner(w=1280, h=720):
     """
-    Fire TV banner. Must be exactly 1280x720.
+    Fire TV banner, drawn at full 1280x720 and returned for downscaling.
 
     Layout: wordmark left, ferry right, both seated on the accent waterline that
     spans the content width, subtitle beneath.
@@ -165,8 +165,8 @@ def make_banner(path, w=1280, h=720):
 
     draw_tracked(left + 4, rule_y + rule_h + gap_sub, sub, f_sub, MUTED, 7)
 
-    img.save(path, "PNG", optimize=True)
-    print(f"  banner  {path} ({w}x{h}, wordmark {size}px)")
+    print(f"  banner  base {w}x{h} (wordmark {size}px)")
+    return img
 
 
 def make_icon(path, size):
@@ -213,9 +213,27 @@ def main():
         sys.exit("usage: generate-artwork.py <res_dir>")
     res = sys.argv[1]
 
-    banner_dir = os.path.join(res, "drawable-nodpi")
-    os.makedirs(banner_dir, exist_ok=True)
-    make_banner(os.path.join(banner_dir, "app_banner.png"))
+    # Banner densities. The slot is 160x90dp, so xhdpi is the 320x180 that both
+    # the Android TV and Fire TV docs ask for; the rest are the same layout
+    # resampled so no launcher has to guess a scale factor.
+    #
+    # Deliberately NOT drawable-nodpi: a nodpi banner is handed to the launcher
+    # at its authored 1280x720 regardless of screen density, so the home row
+    # gets an image ~4x its slot and squashes it to fit.
+    base = make_banner()
+    stale_nodpi = os.path.join(res, "drawable-nodpi", "app_banner.png")
+    if os.path.exists(stale_nodpi):
+        os.remove(stale_nodpi)
+        print(f"  removed {stale_nodpi}")
+
+    for bucket, bw in (("mdpi", 160), ("hdpi", 240), ("xhdpi", 320),
+                       ("xxhdpi", 480), ("xxxhdpi", 640)):
+        bh = bw * 9 // 16
+        dd = os.path.join(res, f"drawable-{bucket}")
+        os.makedirs(dd, exist_ok=True)
+        path = os.path.join(dd, "app_banner.png")
+        base.resize((bw, bh), Image.LANCZOS).save(path, "PNG", optimize=True)
+        print(f"  banner  {path} ({bw}x{bh})")
 
     # Standard launcher densities (mdpi baseline 48dp).
     for bucket, px in (("mdpi", 48), ("hdpi", 72), ("xhdpi", 96),
@@ -223,6 +241,17 @@ def main():
         dd = os.path.join(res, f"mipmap-{bucket}")
         os.makedirs(dd, exist_ok=True)
         make_icon(os.path.join(dd, "ic_launcher.png"), px)
+
+    # README artwork. Kept as its own copy rather than pointing the README at
+    # mipmap-xxxhdpi/ic_launcher.png: GitHub's raw CDN caches by URL, so a
+    # redesign that reuses the old path can keep serving the old icon for days.
+    # Regenerating alongside the launcher icons is what keeps the two in step.
+    assets = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "docs", "assets")
+    os.makedirs(assets, exist_ok=True)
+    make_icon(os.path.join(assets, "ferry-icon.png"), 256)
+    base.save(os.path.join(assets, "ferry-banner.png"), "PNG", optimize=True)
+    print(f"  banner  {os.path.join(assets, 'ferry-banner.png')} (1280x720)")
 
 
 if __name__ == "__main__":

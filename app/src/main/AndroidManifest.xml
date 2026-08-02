@@ -85,9 +85,15 @@
             - screenOrientation="landscape": TV apps are always landscape
             - configChanges: handle orientation/screen size changes ourselves
               to avoid destroying the RTSP session on a config change
+            - banner: repeated here even though <application> already sets it.
+              Fire OS's launcher reads ActivityInfo.banner for the leanback
+              entry point and falls back to the square launcher *icon* — not to
+              the application banner — when the activity has none, which is why
+              the home row showed a stretched icon instead of the artwork.
         -->
         <activity
             android:name=".MainActivity"
+            android:banner="@drawable/app_banner"
             android:exported="true"
             android:launchMode="singleTop"
             android:screenOrientation="landscape"

@@ -1,4 +1,4 @@
-<img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" alt="Ferry icon" width="64">
+<img src="docs/assets/ferry-icon.png" alt="Ferry icon" width="64">
 
 # Ferry
 
