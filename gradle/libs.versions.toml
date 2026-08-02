@@ -13,6 +13,7 @@ appcompat = "1.7.0"
 constraintlayout = "2.1.4"
 core-ktx = "1.13.1"
 leanback = "1.2.0"                     # TV navigation, focus management, on-screen keyboard
+profileinstaller = "1.4.1"             # Applies the baseline profile on API 24–30 (Fire OS 6 is 25)
 
 # Kotlin Coroutines — for all async I/O (network, media)
 coroutines = "1.8.1"
@@ -45,6 +46,7 @@ androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version
 androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
 androidx-leanback = { group = "androidx.leanback", name = "leanback", version.ref = "leanback" }
+androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
 
 # DataStore — async, type-safe settings persistence
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }

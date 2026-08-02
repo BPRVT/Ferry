@@ -28,8 +28,8 @@ android {
         // applicationId is overridden per flavor below
         minSdk = 25           // Lowest common denominator (Fire TV)
         targetSdk = 35
-        versionCode = 9
-        versionName = "2.0.5"
+        versionCode = 10
+        versionName = "2.0.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "CAST_APP_ID", "\"${castAppId.escapedForBuildConfig()}\"")
@@ -218,6 +218,11 @@ dependencies {
 
     // Leanback — TV focus management, on-screen keyboard, TV-specific widgets
     implementation(libs.androidx.leanback)
+
+    // ProfileInstaller — writes src/main/baseline-prof.txt into the ART profile on first run.
+    // This is the component that actually applies a baseline profile on API 24–30; Fire OS 6 is
+    // API 25, so without it the profile we ship would be inert on the primary target device.
+    implementation(libs.androidx.profileinstaller)
 
     // DataStore — async, type-safe replacement for SharedPreferences
     implementation(libs.androidx.datastore.preferences)

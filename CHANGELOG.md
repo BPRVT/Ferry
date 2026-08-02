@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.6] - 2026-08-02
+
+### Changed
+
+- Frame classification is now a **single pass**. Deciding whether a frame is
+  disposable (for the drop policy) and whether it is a keyframe (for resync)
+  reads the same 1-byte NAL headers, so `classify` answers both at once and the
+  result rides on the queued frame — the decoder thread no longer re-walks a
+  frame the reader thread already walked. Halves the work in the resync case,
+  which is exactly when the pipeline is already struggling.
+
+  The early exit on the first referenced slice is preserved, so the common case
+  is not slower: a typical single-slice frame still settles after 4 bytes rather
+  than a walk over ~100 KB of payload. Keyframe-ness is still correct at that
+  exit because H.264 does not mix IDR and non-IDR slices within one access unit,
+  and an IDR slice always carries `nal_ref_idc != 0`.
+
+- The wait for the video Surface at session start now polls every 5 ms instead
+  of every 100 ms. The 5 s ceiling is unchanged; what changed is measurement
+  lag. The old interval added up to 100 ms of black screen *after* the Surface
+  already existed, sitting directly between "sender connected" and "first frame
+  drawn".
+
+- Added a **baseline profile** plus `androidx.profileinstaller`, so ART compiles
+  the startup path and the streaming hot path ahead of time instead of
+  interpreting them and waiting for the JIT. On API 24-30 there is no
+  Play-supplied cloud profile, and Fire OS 6 is API 25, so this is the only way
+  the target device gets any AOT compilation at all.
+
+  The profile is hand-authored: generating one properly needs the
+  `androidx.baselineprofile` plugin driving a real device or emulator, and
+  neither is available here. It should be regenerated from a recorded run if a
+  device ever becomes reachable.
+
+---
+
 ## [2.0.5] - 2026-08-02
 
 ### Security

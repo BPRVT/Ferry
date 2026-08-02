@@ -1,0 +1,103 @@
+# Baseline profile for Ferry.
+#
+# WHAT: a list of classes and methods that ART should compile ahead of time (AOT) instead of
+# interpreting and JIT-compiling on first use. AGP compiles this into assets/dexopt/baseline.prof,
+# and androidx.profileinstaller writes it into the app's ART profile on first run.
+#
+# WHY IT MATTERS HERE: the primary target is a Fire OS 6 television (API 25) on a modest MStar SoC.
+# On API 24-30 there is no Play-supplied cloud profile, so without profileinstaller + this file
+# every launch starts fully interpreted and warms up only as the JIT catches on. That is felt twice:
+# once at app cold start, and again on the first seconds of a mirroring session, which is exactly
+# when the decode pipeline is least able to absorb extra CPU.
+#
+# FORMAT (human-readable profile, one rule per line):
+#   H = hot (called often), S = startup (called during app startup), P = post-startup
+#   L<class>;-><method><signature>   for a method,  L<class>;  for a whole class
+#
+# Class names survive R8 because proguard-rules.pro keeps com.ferry.receiver.** verbatim, so these
+# rules still match in a minified release build.
+#
+# NOTE: this is hand-authored rather than generated. Generating one properly needs the
+# androidx.baselineprofile plugin driving a real device or emulator, and neither is available on
+# this machine. Hand-authored profiles are a supported input and still help; they are just less
+# precise than a recorded run. If a device ever becomes reachable, regenerate this file rather than
+# extending it by hand.
+
+# ─── Application startup ──────────────────────────────────────────────────────
+HSPLcom/ferry/receiver/FerryApp;-><init>()V
+HSPLcom/ferry/receiver/FerryApp;->onCreate()V
+Lcom/ferry/receiver/FerryApp;
+
+HSPLcom/ferry/receiver/MainActivity;-><init>()V
+HSPLcom/ferry/receiver/MainActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/ferry/receiver/MainActivity;->onStart()V
+HSPLcom/ferry/receiver/MainActivity;->onResume()V
+Lcom/ferry/receiver/MainActivity;
+
+# Settings are read on the startup path (FerryService reads them to configure the receivers).
+HSPLcom/ferry/receiver/settings/AppSettings;-><init>(**)V
+HSPLcom/ferry/receiver/settings/SettingsRepository;->**(**)**
+Lcom/ferry/receiver/settings/AppSettings;
+Lcom/ferry/receiver/settings/SettingsRepository;
+
+# UI shown immediately on launch.
+HSPLcom/ferry/receiver/ui/HomeFragment;->**(**)**
+HSPLcom/ferry/receiver/ui/StreamingScreen;->**(**)**
+Lcom/ferry/receiver/ui/HomeFragment;
+Lcom/ferry/receiver/ui/StreamingScreen;
+
+# Foreground service and its state machine — started on app launch.
+HSPLcom/ferry/receiver/service/FerryService;->**(**)**
+HSPLcom/ferry/receiver/service/ServiceController;->**(**)**
+Lcom/ferry/receiver/service/FerryService;
+Lcom/ferry/receiver/service/ServiceController;
+
+# Advertised over mDNS at startup; a slow first registration delays discovery by the sender.
+HSPLcom/ferry/receiver/airplay/MdnsService;->**(**)**
+Lcom/ferry/receiver/airplay/MdnsService;
+
+# ─── Streaming hot path ───────────────────────────────────────────────────────
+# Per frame, at up to 60 fps. These are the methods that must not be interpreted while the decoder
+# is trying to keep up.
+HSPLcom/ferry/receiver/airplay/handshake/MirrorStreamServer;->**(**)**
+HSPLcom/ferry/receiver/airplay/handshake/MirrorStreamServer$Companion;->**(**)**
+HSPLcom/ferry/receiver/airplay/handshake/MirrorCrypto;->**(**)**
+HSPLcom/ferry/receiver/airplay/VideoDecoder;->**(**)**
+HSPLcom/ferry/receiver/airplay/RtpInterleaved;->**(**)**
+Lcom/ferry/receiver/airplay/handshake/MirrorStreamServer;
+Lcom/ferry/receiver/airplay/handshake/MirrorCrypto;
+Lcom/ferry/receiver/airplay/VideoDecoder;
+Lcom/ferry/receiver/airplay/RtpInterleaved;
+
+# Per audio packet — several hundred a second, and an underrun here is audible.
+HSPLcom/ferry/receiver/airplay/handshake/AudioStreamServer;->**(**)**
+HSPLcom/ferry/receiver/airplay/handshake/AlacDecoder;->**(**)**
+HSPLcom/ferry/receiver/airplay/AudioPlayer;->**(**)**
+Lcom/ferry/receiver/airplay/handshake/AudioStreamServer;
+Lcom/ferry/receiver/airplay/handshake/AlacDecoder;
+Lcom/ferry/receiver/airplay/AudioPlayer;
+
+# Session setup: the handshake runs once per connection, but it runs while the user is staring at a
+# blank screen waiting for the picture, so it is worth compiling too.
+HSPLcom/ferry/receiver/airplay/AirPlayReceiver;->**(**)**
+HSPLcom/ferry/receiver/airplay/RtspHandler;->**(**)**
+HSPLcom/ferry/receiver/airplay/RtspRequestReader;->**(**)**
+HSPLcom/ferry/receiver/airplay/SdpParser;->**(**)**
+HSPLcom/ferry/receiver/airplay/handshake/PlistCodec;->**(**)**
+HSPLcom/ferry/receiver/airplay/handshake/PairingSession;->**(**)**
+HSPLcom/ferry/receiver/airplay/handshake/FairPlay;->**(**)**
+Lcom/ferry/receiver/airplay/AirPlayReceiver;
+Lcom/ferry/receiver/airplay/RtspHandler;
+Lcom/ferry/receiver/airplay/RtspRequestReader;
+Lcom/ferry/receiver/airplay/SdpParser;
+Lcom/ferry/receiver/airplay/handshake/PlistCodec;
+Lcom/ferry/receiver/airplay/handshake/PairingSession;
+Lcom/ferry/receiver/airplay/handshake/FairPlay;
+
+# Logging wrapper — called from every one of the paths above.
+HSPLcom/ferry/receiver/util/Logger;->**(**)**
+Lcom/ferry/receiver/util/Logger;
+
+# Stats written per frame and read by the debug overlay.
+HSPLcom/ferry/receiver/airplay/StreamStats;->**(**)**
+Lcom/ferry/receiver/airplay/StreamStats;

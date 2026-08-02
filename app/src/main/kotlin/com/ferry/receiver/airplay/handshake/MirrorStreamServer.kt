@@ -47,9 +47,18 @@ class MirrorStreamServer(
      * @param length count of valid bytes in [annexB].
      * @param disposable true when no slice in this frame is used as a reference by any later
      *   frame (every slice NAL has `nal_ref_idc == 0`), so dropping it under load costs a single
-     *   invisible frame and needs no keyframe resync. Computed once on the reader thread.
+     *   invisible frame and needs no keyframe resync.
+     * @param keyframe true when the frame carries an IDR slice, so the decoder can resync on it.
+     *
+     * Both are computed in one pass on the reader thread by [classify], so the decoder thread never
+     * walks the frame again.
      */
-    private class Frame(val annexB: ByteArray, val length: Int, val disposable: Boolean) : Item()
+    private class Frame(
+        val annexB: ByteArray,
+        val length: Int,
+        val disposable: Boolean,
+        val keyframe: Boolean,
+    ) : Item()
 
     private val cipher = MirrorCrypto.streamCipher(aesKey, ecdhSecret, streamConnectionId)
     private val serverSocket = ServerSocket(0)            // OS-assigned free port
@@ -129,7 +138,14 @@ class MirrorStreamServer(
                         // allocate a ByteArrayOutputStream and its toByteArray() copy per frame.
                         val decrypted = cipher.update(payload)
                         val len = MirrorCrypto.avccToAnnexBInPlace(decrypted)
-                        if (len > 0) enqueue(Frame(decrypted, len, Companion.isDisposable(decrypted, len)))
+                        if (len > 0) {
+                            val flags = Companion.classify(decrypted, len)
+                            enqueue(Frame(
+                                decrypted, len,
+                                disposable = (flags and FLAG_DISPOSABLE) != 0,
+                                keyframe = (flags and FLAG_KEYFRAME) != 0,
+                            ))
+                        }
                     }
                     1 -> parseConfig(payload)?.let { enqueue(it) }
                     else -> Logger.v { "Mirror: ignoring payload type $payloadType ($payloadSize B)" }
@@ -206,7 +222,7 @@ class MirrorStreamServer(
                 val item = queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
                 when (item) {
                     is Config -> configureDecoder(item.sps, item.pps)
-                    is Frame -> decodeFrame(item.annexB, item.length)
+                    is Frame -> decodeFrame(item)
                 }
             }
         } catch (e: Exception) {
@@ -248,7 +264,9 @@ class MirrorStreamServer(
         Logger.i("Mirror decoder (re)built for surface (sps=${sps.size}B pps=${pps.size}B)")
     }
 
-    private fun decodeFrame(annexB: ByteArray, length: Int) {
+    private fun decodeFrame(frame: Frame) {
+        val annexB = frame.annexB
+        val length = frame.length
         // Re-attach to the live Surface if it changed (the app was backgrounded and returned, so the
         // SurfaceView made a new Surface). Without this, video stays black after foregrounding.
         val liveSurface = surfaceProvider()
@@ -265,7 +283,7 @@ class MirrorStreamServer(
         if (awaitingKeyframe) {
             // After a dropped frame the stream is reference-broken; skip until the next IDR so we
             // don't feed the decoder predicted frames with missing references (which smear/blocky).
-            if (!isKeyframe(annexB, length)) return
+            if (!frame.keyframe) return
             awaitingKeyframe = false
             Logger.i("Mirror: resynced on keyframe after a dropped frame")
         }
@@ -275,28 +293,20 @@ class MirrorStreamServer(
     }
 
     /**
-     * True if the Annex-B frame contains an IDR NAL unit (type 5) — a decodable resync point.
-     * Only the first [length] bytes of [annexB] are examined.
+     * Waits for the streaming Surface, which MainActivity creates shortly after CONNECTED is
+     * emitted. Bounded by [SURFACE_WAIT_TIMEOUT_MS].
+     *
+     * The poll interval is short on purpose. This sits directly in the path between "sender
+     * connected" and "first frame on screen", and the old 100 ms interval added up to a further
+     * 100 ms (50 ms on average) of black screen *after* the Surface already existed — pure
+     * measurement lag, not work. Polling every 5 ms costs nothing real: the thread has nothing else
+     * to do, and it only spins during session start, never in steady state.
      */
-    private fun isKeyframe(annexB: ByteArray, length: Int): Boolean {
-        var i = 0
-        while (i + 3 < length) {
-            if (annexB[i].toInt() == 0 && annexB[i + 1].toInt() == 0 && annexB[i + 2].toInt() == 1) {
-                if ((annexB[i + 3].toInt() and 0x1F) == 5) return true   // IDR slice
-                i += 3
-            } else {
-                i++
-            }
-        }
-        return false
-    }
-
-    /** The streaming Surface appears shortly after CONNECTED is emitted; poll briefly. */
     private fun awaitSurface(): Surface? {
-        repeat(SURFACE_WAIT_TRIES) {
-            if (!running) return null
+        val deadline = System.nanoTime() + SURFACE_WAIT_TIMEOUT_MS * 1_000_000L
+        while (running && System.nanoTime() < deadline) {
             surfaceProvider()?.let { return it }
-            try { Thread.sleep(SURFACE_WAIT_MS) } catch (_: InterruptedException) { return null }
+            try { Thread.sleep(SURFACE_POLL_MS) } catch (_: InterruptedException) { return null }
         }
         return surfaceProvider()
     }
@@ -341,8 +351,9 @@ class MirrorStreamServer(
         private const val SOCKET_RCVBUF = 1024 * 1024          // kernel-side burst absorption
         private const val NAL_SLICE_NON_IDR = 1
         private const val NAL_SLICE_IDR = 5
-        private const val SURFACE_WAIT_TRIES = 50
-        private const val SURFACE_WAIT_MS = 100L
+        /** Overall ceiling on waiting for the Surface — unchanged; only the granularity improved. */
+        private const val SURFACE_WAIT_TIMEOUT_MS = 5_000L
+        private const val SURFACE_POLL_MS = 5L
 
         /**
          * True if no later frame can reference this one, so dropping it under load is invisible
@@ -359,17 +370,54 @@ class MirrorStreamServer(
          *
          * In the companion, and `internal`, so it is testable without opening a socket.
          */
-        internal fun isDisposable(annexB: ByteArray, length: Int = annexB.size): Boolean {
+        internal fun isDisposable(annexB: ByteArray, length: Int = annexB.size): Boolean =
+            (classify(annexB, length) and FLAG_DISPOSABLE) != 0
+
+        /** True if the frame carries an IDR slice — a point the decoder can resync on. */
+        internal fun isKeyframe(annexB: ByteArray, length: Int = annexB.size): Boolean =
+            (classify(annexB, length) and FLAG_KEYFRAME) != 0
+
+        const val FLAG_DISPOSABLE = 1
+        const val FLAG_KEYFRAME = 2
+
+        /**
+         * Single walk of a frame's NAL headers, returning [FLAG_DISPOSABLE] and [FLAG_KEYFRAME].
+         *
+         * Both properties are decided by the same 1-byte NAL headers, so answering them together
+         * costs one pass instead of two. Disposability is needed for every frame (the drop policy
+         * reads it at enqueue) and keyframe-ness whenever the decoder is resyncing; computing both
+         * up front is never more work than the old two-function version and is half the work in the
+         * resync case, which is exactly when the pipeline is already struggling.
+         *
+         * In the companion, and `internal`, so it is testable without opening a socket.
+         */
+        internal fun classify(annexB: ByteArray, length: Int = annexB.size): Int {
             var sawSlice = false
+            var referenced = false
+            var keyframe = false
             var i = 0
             while (i + 3 < length) {
                 if (annexB[i].toInt() == 0 && annexB[i + 1].toInt() == 0 && annexB[i + 2].toInt() == 1) {
                     val header = annexB[i + 3].toInt()
-                    when (header and 0x1F) {
-                        NAL_SLICE_NON_IDR, NAL_SLICE_IDR -> {
-                            sawSlice = true
-                            // nal_ref_idc != 0 → a later frame may predict from this slice.
-                            if ((header and 0x60) != 0) return false
+                    val type = header and 0x1F
+                    if (type == NAL_SLICE_IDR || type == NAL_SLICE_NON_IDR) {
+                        sawSlice = true
+                        if (type == NAL_SLICE_IDR) keyframe = true
+                        // nal_ref_idc != 0 → a later frame may predict from this slice.
+                        if ((header and 0x60) != 0) {
+                            referenced = true
+                            // Both answers are settled, so stop walking the payload.
+                            //
+                            // Disposability is decided: one referenced slice is enough. Keyframe-ness
+                            // is decided too, because H.264 does not mix IDR and non-IDR slices
+                            // within one access unit (§7.4.1.2.4) — so whatever the slices seen so
+                            // far say, the rest of the frame says the same. An IDR slice always has
+                            // nal_ref_idc != 0, so an IDR frame breaks here with keyframe already set.
+                            //
+                            // This early exit is what the old isDisposable did, and it matters: a
+                            // typical single-slice frame settles after 4 bytes instead of a walk over
+                            // ~100 KB of payload looking for start codes.
+                            break
                         }
                     }
                     i += 4
@@ -377,7 +425,12 @@ class MirrorStreamServer(
                     i++
                 }
             }
-            return sawSlice
+            var flags = 0
+            // Conservative by construction: a frame carrying no slice NALs at all is not disposable,
+            // and a sender that marks everything as a reference simply never yields this flag.
+            if (sawSlice && !referenced) flags = flags or FLAG_DISPOSABLE
+            if (keyframe) flags = flags or FLAG_KEYFRAME
+            return flags
         }
     }
 }
