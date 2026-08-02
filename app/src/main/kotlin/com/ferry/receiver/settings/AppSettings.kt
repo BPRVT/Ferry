@@ -93,7 +93,19 @@ data class AppSettings(
      * the whole mirror session down after a couple of seconds — so this defaults OFF to keep video
      * mirroring rock-solid. Turn on to experiment with audio.
      */
-    val mirrorAudioEnabled: Boolean = true
+    val mirrorAudioEnabled: Boolean = true,
+
+    /**
+     * When true, scale the mirrored picture to fill the TV, cropping up to
+     * [com.ferry.receiver.util.VideoFit.MAX_CROP_FRACTION] of it rather than showing black bars.
+     * When false, always show the whole picture and accept the bars.
+     *
+     * Exists because a source's shape belongs to the sending device and cannot be negotiated: an
+     * iPad's screen is 4:3 and a 16:9 TV can only show it with bars, a crop, or distortion. A 4:3
+     * source loses a quarter of the screen to side bars under a plain fit; smart fill trades a
+     * controlled slice of the top and bottom for most of that back.
+     */
+    val smartFillEnabled: Boolean = true
 ) {
 
     /** Advertised mirroring display size: 2560×1440 when [forceHighResolution], else 1920×1080. */

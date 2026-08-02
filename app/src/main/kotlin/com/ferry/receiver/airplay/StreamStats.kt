@@ -15,6 +15,16 @@ object StreamStats {
     /** Master switch, mirrored from the user setting; the overlay only draws when true. */
     @Volatile var overlayEnabled = false
 
+    /**
+     * Mirrored from [com.ferry.receiver.settings.AppSettings.smartFillEnabled]. When true,
+     * [com.ferry.receiver.ui.StreamingScreen] fills the TV and crops up to
+     * [com.ferry.receiver.util.VideoFit.MAX_CROP_FRACTION] rather than showing black bars.
+     *
+     * Read on the layout tick rather than at session start, so flipping the toggle takes effect on
+     * the picture immediately instead of at the next connection.
+     */
+    @Volatile var smartFillEnabled = true
+
     // ─── Video (MirrorStreamServer) ──────────────────────────────────────────
     @Volatile var videoRes = ""        // e.g. "1920x1080"
     @Volatile var videoFps = 0         // frames/sec over the last sample window

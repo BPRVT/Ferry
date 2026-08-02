@@ -14,6 +14,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import com.ferry.receiver.airplay.StreamStats
 import com.ferry.receiver.util.Logger
+import com.ferry.receiver.util.VideoFit
 
 /**
  * StreamingScreen — Full-screen view that displays the AirPlay video stream.
@@ -129,23 +130,26 @@ class StreamingScreen @JvmOverloads constructor(
     fun getSurface(): Surface? = surface
 
     /**
-     * Sizes the SurfaceView to the decoded video's aspect ratio (letterbox/pillarbox) instead of
-     * stretching it to fill 16:9. Without this, a portrait phone stream is squashed horizontally.
-     * Falls back to filling the container when the size isn't known yet.
+     * Sizes the SurfaceView for the decoded video instead of stretching it to fill 16:9. Without
+     * this, a portrait phone stream is squashed horizontally.
+     *
+     * The arithmetic lives in [VideoFit] so it can be unit-tested without an Android runtime; see
+     * there for what "smart fill" means. Note the result may be *larger* than this container in one
+     * dimension when smart fill is on — that is the crop, and it works because this FrameLayout
+     * clips its children.
+     *
+     * Falls back to filling the container when the source size isn't known yet.
      */
     private fun applyAspectFit() {
-        val vw = StreamStats.videoWidth
-        val vh = StreamStats.videoHeight
-        val cw = width
-        val ch = height
-        val (targetW, targetH) = if (vw <= 0 || vh <= 0 || cw <= 0 || ch <= 0) {
-            LayoutParams.MATCH_PARENT to LayoutParams.MATCH_PARENT
-        } else {
-            val videoRatio = vw.toFloat() / vh
-            val containerRatio = cw.toFloat() / ch
-            if (videoRatio > containerRatio) cw to (cw / videoRatio).toInt()   // fit width, bars top/bottom
-            else (ch * videoRatio).toInt() to ch                              // fit height, bars left/right
-        }
+        val target = VideoFit.targetSize(
+            videoW = StreamStats.videoWidth,
+            videoH = StreamStats.videoHeight,
+            containerW = width,
+            containerH = height,
+            smartFill = StreamStats.smartFillEnabled,
+        )
+        val (targetW, targetH) = target
+            ?: (LayoutParams.MATCH_PARENT to LayoutParams.MATCH_PARENT)
         if (targetW == lastSurfaceW && targetH == lastSurfaceH) return
         lastSurfaceW = targetW
         lastSurfaceH = targetH

@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.0.0] - 2026-08-02
+
+### Added
+
+- **Smart fill** (Settings → Smart fill, on by default). Scales the mirrored
+  picture to fill the TV, cropping up to 15% of it rather than showing black
+  bars. Turn it off to go back to showing the whole picture with bars.
+
+  A source's shape belongs to the sending device and cannot be negotiated: an
+  iPad's screen genuinely is 4:3, and a 16:9 TV can only show it with bars, a
+  crop, or distortion. Nothing the receiver advertises changes that — the
+  `displays` record in `/info` influences what a *Mac* encodes, while iOS mirrors
+  its own screen geometry regardless.
+
+  So this trades one for the other, with a cap. A 4:3 iPad needs 25% of crop to
+  fill completely; it takes the 15% it is allowed and keeps the rest as side
+  bars, which are now roughly a quarter of their old width. On an iPad the
+  cropped slice is the status bar and dock area rather than anything central.
+  A landscape iPhone, already close to filling, loses very little. A 16:9 source
+  is untouched in either mode, and portrait sources stay pillarboxed because the
+  cap stops them being blown up.
+
+  The toggle applies to the live picture within ~200 ms rather than at the next
+  session, so its effect can be judged directly.
+
+### Note
+
+- Major version bump because this changes what the picture looks like by
+  default, not because of an API break.
+
+---
+
 ## [2.0.6] - 2026-08-02
 
 ### Changed

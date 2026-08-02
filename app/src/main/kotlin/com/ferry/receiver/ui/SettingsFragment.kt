@@ -16,6 +16,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.ferry.receiver.BuildConfig
 import com.ferry.receiver.R
+import com.ferry.receiver.airplay.StreamStats
 import com.ferry.receiver.airplay.handshake.PairingStore
 import com.ferry.receiver.settings.AppSettings
 import com.ferry.receiver.settings.SettingsRepository
@@ -56,6 +57,7 @@ class SettingsFragment : Fragment() {
     private lateinit var rowCast: View
     private lateinit var rowMirrorAudio: View
     private lateinit var rowPinAuth: View
+    private lateinit var rowSmartFill: View
     private lateinit var rowStartOnBoot: View
     private lateinit var rowDebugOverlay: View
     private lateinit var rowForceHighRes: View
@@ -94,6 +96,7 @@ class SettingsFragment : Fragment() {
         rowCast             = view.findViewById(R.id.row_cast)
         rowMirrorAudio      = view.findViewById(R.id.row_mirror_audio)
         rowPinAuth          = view.findViewById(R.id.row_pin_auth)
+        rowSmartFill        = view.findViewById(R.id.row_smart_fill)
         rowStartOnBoot      = view.findViewById(R.id.row_start_on_boot)
         rowDebugOverlay     = view.findViewById(R.id.row_debug_overlay)
         rowForceHighRes     = view.findViewById(R.id.row_force_high_res)
@@ -118,6 +121,7 @@ class SettingsFragment : Fragment() {
         configureToggleRow(rowCast,         R.string.setting_cast_enabled,       R.string.setting_cast_subtitle)
         configureToggleRow(rowMirrorAudio,  R.string.setting_mirror_audio,       R.string.setting_mirror_audio_subtitle)
         configureToggleRow(rowPinAuth,      R.string.setting_pin_auth,           R.string.setting_pin_auth_subtitle)
+        configureToggleRow(rowSmartFill,    R.string.setting_smart_fill,         R.string.setting_smart_fill_subtitle)
         configureToggleRow(rowStartOnBoot,  R.string.setting_start_on_boot,      0)
         configureToggleRow(rowDebugOverlay, R.string.setting_debug_overlay,      R.string.setting_debug_overlay_subtitle)
         configureToggleRow(rowForceHighRes, R.string.setting_force_high_res,      R.string.setting_force_high_res_subtitle)
@@ -167,6 +171,7 @@ class SettingsFragment : Fragment() {
         setToggle(rowCast,         settings.castEnabled)
         setToggle(rowMirrorAudio,  settings.mirrorAudioEnabled)
         setToggle(rowPinAuth,      settings.airPlayPinAuthEnabled)
+        setToggle(rowSmartFill,    settings.smartFillEnabled)
         setToggle(rowStartOnBoot,  settings.startOnBoot)
         setToggle(rowDebugOverlay, settings.showDebugOverlay)
         setToggle(rowForceHighRes, settings.forceHighResolution)
@@ -215,6 +220,12 @@ class SettingsFragment : Fragment() {
         setToggleListener(rowStartOnBoot)  { enabled -> save { it.copy(startOnBoot = enabled) } }
         setToggleListener(rowDebugOverlay) { enabled -> save { it.copy(showDebugOverlay = enabled) } }
         setToggleListener(rowForceHighRes) { enabled -> save { it.copy(forceHighResolution = enabled) } }
+        setToggleListener(rowSmartFill)    { enabled ->
+            // Push straight to StreamStats as well as persisting: StreamingScreen reads the flag on
+            // its layout tick, so the picture re-fits within ~200 ms instead of at the next session.
+            StreamStats.smartFillEnabled = enabled
+            save { it.copy(smartFillEnabled = enabled) }
+        }
 
         rowReset.setOnClickListener { resetSettings() }
     }

@@ -113,7 +113,8 @@ class SettingsRepository(private val context: Context) {
         startOnBoot        = this[Keys.START_ON_BOOT]           ?: false,
         showDebugOverlay   = this[Keys.SHOW_DEBUG_OVERLAY]      ?: false,
         forceHighResolution = this[Keys.FORCE_HIGH_RESOLUTION]  ?: false,
-        mirrorAudioEnabled = this[Keys.MIRROR_AUDIO_ENABLED]    ?: true
+        mirrorAudioEnabled = this[Keys.MIRROR_AUDIO_ENABLED]    ?: true,
+        smartFillEnabled   = this[Keys.SMART_FILL]              ?: true
     )
 
     /**
@@ -130,6 +131,7 @@ class SettingsRepository(private val context: Context) {
         this[Keys.SHOW_DEBUG_OVERLAY]   = settings.showDebugOverlay
         this[Keys.FORCE_HIGH_RESOLUTION] = settings.forceHighResolution
         this[Keys.MIRROR_AUDIO_ENABLED] = settings.mirrorAudioEnabled
+        this[Keys.SMART_FILL]           = settings.smartFillEnabled
     }
 
     /**
@@ -144,6 +146,7 @@ class SettingsRepository(private val context: Context) {
         val MIRACAST_ENABLED    = booleanPreferencesKey("miracast_enabled")
         val CAST_ENABLED        = booleanPreferencesKey("cast_enabled")
         val AIRPLAY_PIN_AUTH    = booleanPreferencesKey("airplay_pin_auth")
+        val SMART_FILL          = booleanPreferencesKey("smart_fill")
         val START_ON_BOOT       = booleanPreferencesKey("start_on_boot")
         val SHOW_DEBUG_OVERLAY  = booleanPreferencesKey("show_debug_overlay")
         val FORCE_HIGH_RESOLUTION = booleanPreferencesKey("force_high_resolution")
