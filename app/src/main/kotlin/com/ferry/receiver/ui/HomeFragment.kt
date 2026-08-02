@@ -16,6 +16,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import com.ferry.receiver.BuildConfig
 import com.ferry.receiver.R
 import com.ferry.receiver.service.FerryService
 import com.ferry.receiver.service.Protocol
@@ -101,6 +102,9 @@ class HomeFragment : Fragment() {
 
     private fun bindViews(view: View) {
         textDeviceName   = view.findViewById(R.id.text_device_name)
+        // Set once — the build cannot change while the process is alive.
+        view.findViewById<TextView>(R.id.text_version).text =
+            getString(R.string.home_version, BuildConfig.VERSION_NAME)
         textServiceState = view.findViewById(R.id.text_service_state)
         dotServiceState  = view.findViewById(R.id.dot_service_state)
         cardAirPlay      = view.findViewById(R.id.card_airplay)

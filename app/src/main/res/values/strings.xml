@@ -28,6 +28,8 @@
     <string name="home_title">Ready for connections</string>
     <!-- %1$s = device name shown in sender pickers -->
     <string name="home_device_visible_as">Visible as: %1$s</string>
+    <!-- %1$s = versionName, which carries the flavor suffix (e.g. "2.0.0-firetv") -->
+    <string name="home_version">v%1$s</string>
 
     <!-- ── Protocol names ──────────────────────────────────────── -->
     <string name="protocol_airplay">AirPlay</string>

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Build version shown on the home screen, under the device name (e.g.
+  `v2.0.0-firetv`). Sideloading gives no install feedback, so this is the only
+  way to confirm at a glance which build is actually on the device. The flavor
+  suffix comes along from `versionNameSuffix`, which also disambiguates the
+  firetv and googletv builds when both are installed.
+
 ---
 
 ## [2.0.0] - 2026-08-01

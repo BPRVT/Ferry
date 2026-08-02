@@ -67,6 +67,18 @@
                     android:layout_marginTop="10dp"
                     android:letterSpacing="0.06"
                     android:textAllCaps="true" />
+
+                <!-- Build identity. Deliberately on the home screen rather than buried in
+                     settings: sideloading gives no install feedback, so this is the only way
+                     to confirm at a glance which build is actually on the device. -->
+                <TextView
+                    android:id="@+id/text_version"
+                    style="@style/Ferry.Text.Caption"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:letterSpacing="0.1"
+                    android:textAllCaps="true" />
             </LinearLayout>
 
             <!-- Global service state. Not focusable — it is a readout, not a
