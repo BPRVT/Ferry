@@ -91,7 +91,7 @@ class VideoDecoder(private val outputSurface: Surface) {
                 codec.releaseOutputBuffer(index, true)
             } catch (e: IllegalStateException) {
                 // Raced with release() — the codec is gone. Nothing to render to.
-                Logger.v("VideoDecoder: output buffer released after shutdown (${e.message})")
+                Logger.v { "VideoDecoder: output buffer released after shutdown (${e.message})" }
             }
         }
 
@@ -226,7 +226,7 @@ class VideoDecoder(private val outputSurface: Surface) {
      * @param nalUnit The raw NAL unit bytes (without the RTP header).
      * @param presentationTimeUs Presentation timestamp in microseconds (for A/V sync).
      */
-    fun decodeNalUnit(nalUnit: ByteArray, presentationTimeUs: Long) {
+    fun decodeNalUnit(nalUnit: ByteArray, presentationTimeUs: Long, length: Int = nalUnit.size) {
         val codec = mediaCodec ?: run {
             Logger.w("decodeNalUnit() called but decoder not initialized")
             return
@@ -242,21 +242,24 @@ class VideoDecoder(private val outputSurface: Surface) {
                 // We got an input buffer — fill it with the NAL unit bytes
                 val inputBuffer = codec.getInputBuffer(inputBufferIndex)!!
                 inputBuffer.clear()
-                inputBuffer.put(nalUnit)
+                // [length] may be shorter than the array: the mirror path converts AVCC to Annex-B
+                // in place and reports how many bytes are valid, rather than allocating an
+                // exactly-sized copy per frame.
+                inputBuffer.put(nalUnit, 0, length)
 
                 // Tell MediaCodec: "input buffer [index] is filled with [size] bytes
                 // of data with timestamp [presentationTimeUs] — please decode it"
                 codec.queueInputBuffer(
                     inputBufferIndex,
                     0,                 // offset: start from beginning of buffer
-                    nalUnit.size,      // size: how many bytes to decode
+                    length,            // size: how many bytes to decode
                     presentationTimeUs,
                     0                  // flags: 0 = normal frame (not end-of-stream)
                 )
             } else {
                 // No input buffer available — the decoder is catching up.
                 // Drop this NAL unit to avoid building up backlog (prefer low latency).
-                Logger.v("VideoDecoder: no input buffer available, dropping NAL unit")
+                Logger.v { "VideoDecoder: no input buffer available, dropping NAL unit" }
             }
 
         } catch (e: IllegalStateException) {

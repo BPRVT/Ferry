@@ -39,23 +39,35 @@ object MirrorCrypto {
 
     /**
      * Converts AVCC (4-byte big-endian length-prefixed) NAL units — the format of a decrypted
-     * mirror video payload — into Annex-B (00 00 00 01 start codes) that MediaCodec expects.
+     * mirror video payload — into Annex-B (00 00 00 01 start codes) that MediaCodec expects,
+     * **in place**, and returns the number of valid bytes at the front of [data].
+     *
+     * An AVCC length prefix and an Annex-B start code are both exactly 4 bytes, so the conversion is
+     * a pure overwrite of each prefix — no copy, no second buffer. The previous version allocated a
+     * ByteArrayOutputStream plus its toByteArray() copy for every frame, which at 60 fps was two
+     * large short-lived allocations a frame on a device with very little GC headroom.
+     *
+     * The return value can be shorter than [data] when the payload ends with a truncated or
+     * malformed record: everything up to that point is valid and is kept, matching the previous
+     * behaviour of stopping at the first bad length.
+     *
+     * @return count of usable bytes from index 0, or 0 if nothing parsed.
      */
-    fun avccToAnnexB(data: ByteArray): ByteArray {
-        val out = ByteArrayOutputStream(data.size + 16)
+    fun avccToAnnexBInPlace(data: ByteArray): Int {
         var i = 0
         while (i + 4 <= data.size) {
             val len = ((data[i].toInt() and 0xFF) shl 24) or
                 ((data[i + 1].toInt() and 0xFF) shl 16) or
                 ((data[i + 2].toInt() and 0xFF) shl 8) or
                 (data[i + 3].toInt() and 0xFF)
-            i += 4
-            if (len <= 0 || i + len > data.size) break
-            out.write(START_CODE)
-            out.write(data, i, len)
-            i += len
+            // A malformed or truncated record ends the frame; keep everything before it.
+            if (len <= 0 || i + 4 + len > data.size) return i
+            // Overwrite the 4-byte length prefix with the 4-byte start code, leaving the NAL payload
+            // that follows exactly where it already is.
+            data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 1
+            i += 4 + len
         }
-        return out.toByteArray()
+        return i
     }
 
     val START_CODE = byteArrayOf(0, 0, 0, 1)

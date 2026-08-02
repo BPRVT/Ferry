@@ -52,10 +52,14 @@ data class AppSettings(
     // ─── AirPlay specific ──────────────────────────────────────────────────
     /**
      * Whether AirPlay connections require PIN authentication.
-     * When true: the user must confirm a 4-digit PIN shown on screen.
-     * When false (default): any nearby Mac can connect without confirmation.
+     * When true (default): the sender must enter a 4-digit PIN shown on the TV.
+     * When false: any device on the local network can mirror without confirmation.
+     *
+     * Defaults ON. Ferry listens on every interface with no transport authentication of its own, so
+     * without this any device that can reach the LAN — including a guest or an untrusted IoT device
+     * on the same subnet — can put arbitrary video on the screen.
      */
-    val airPlayPinAuthEnabled: Boolean = false,
+    val airPlayPinAuthEnabled: Boolean = true,
 
     // ─── Service behavior ──────────────────────────────────────────────────
     /**

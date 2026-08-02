@@ -35,9 +35,14 @@ class AppSettingsTest {
         assertTrue(AppSettings.DEFAULT.castEnabled)
     }
 
+    /**
+     * PIN auth defaults ON. Ferry listens on every interface with no transport authentication of
+     * its own, so off-by-default let any device that could reach the LAN put video on the screen.
+     * Pinned as a test because it is a security posture decision, not an incidental default.
+     */
     @Test
-    fun `default settings have pin auth disabled`() {
-        assertFalse(AppSettings.DEFAULT.airPlayPinAuthEnabled)
+    fun `default settings have pin auth enabled`() {
+        assertTrue(AppSettings.DEFAULT.airPlayPinAuthEnabled)
     }
 
     @Test

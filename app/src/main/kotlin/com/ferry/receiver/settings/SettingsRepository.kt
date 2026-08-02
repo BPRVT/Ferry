@@ -109,7 +109,7 @@ class SettingsRepository(private val context: Context) {
         airPlayEnabled     = this[Keys.AIRPLAY_ENABLED]         ?: true,
         miracastEnabled    = this[Keys.MIRACAST_ENABLED]        ?: true,
         castEnabled        = this[Keys.CAST_ENABLED]            ?: true,
-        airPlayPinAuthEnabled = this[Keys.AIRPLAY_PIN_AUTH]     ?: false,
+        airPlayPinAuthEnabled = this[Keys.AIRPLAY_PIN_AUTH]     ?: true,
         startOnBoot        = this[Keys.START_ON_BOOT]           ?: false,
         showDebugOverlay   = this[Keys.SHOW_DEBUG_OVERLAY]      ?: false,
         forceHighResolution = this[Keys.FORCE_HIGH_RESOLUTION]  ?: false,

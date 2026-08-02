@@ -42,11 +42,14 @@ class MirrorStreamServer(
     private class Config(val sps: ByteArray, val pps: ByteArray) : Item()
 
     /**
+     * @param annexB Annex-B bytes; only the first [length] bytes are valid (the AVCC→Annex-B
+     *   conversion runs in place, so the array is the decrypted payload buffer and may have a tail).
+     * @param length count of valid bytes in [annexB].
      * @param disposable true when no slice in this frame is used as a reference by any later
      *   frame (every slice NAL has `nal_ref_idc == 0`), so dropping it under load costs a single
      *   invisible frame and needs no keyframe resync. Computed once on the reader thread.
      */
-    private class Frame(val annexB: ByteArray, val disposable: Boolean) : Item()
+    private class Frame(val annexB: ByteArray, val length: Int, val disposable: Boolean) : Item()
 
     private val cipher = MirrorCrypto.streamCipher(aesKey, ecdhSecret, streamConnectionId)
     private val serverSocket = ServerSocket(0)            // OS-assigned free port
@@ -121,11 +124,15 @@ class MirrorStreamServer(
                     0 -> {
                         // ALWAYS advance the AES-CTR keystream, in order, for every video payload —
                         // skipping any packet desyncs the keystream and corrupts all later frames.
-                        val annexB = MirrorCrypto.avccToAnnexB(cipher.update(payload))
-                        if (annexB.isNotEmpty()) enqueue(Frame(annexB, Companion.isDisposable(annexB)))
+                        // Decrypt, then rewrite AVCC length prefixes to Annex-B start codes in the
+                        // same buffer — both are 4 bytes, so no copy is needed. This used to
+                        // allocate a ByteArrayOutputStream and its toByteArray() copy per frame.
+                        val decrypted = cipher.update(payload)
+                        val len = MirrorCrypto.avccToAnnexBInPlace(decrypted)
+                        if (len > 0) enqueue(Frame(decrypted, len, Companion.isDisposable(decrypted, len)))
                     }
                     1 -> parseConfig(payload)?.let { enqueue(it) }
-                    else -> Logger.v("Mirror: ignoring payload type $payloadType ($payloadSize B)")
+                    else -> Logger.v { "Mirror: ignoring payload type $payloadType ($payloadSize B)" }
                 }
             }
         } catch (e: Exception) {
@@ -199,7 +206,7 @@ class MirrorStreamServer(
                 val item = queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
                 when (item) {
                     is Config -> configureDecoder(item.sps, item.pps)
-                    is Frame -> decodeFrame(item.annexB)
+                    is Frame -> decodeFrame(item.annexB, item.length)
                 }
             }
         } catch (e: Exception) {
@@ -241,7 +248,7 @@ class MirrorStreamServer(
         Logger.i("Mirror decoder (re)built for surface (sps=${sps.size}B pps=${pps.size}B)")
     }
 
-    private fun decodeFrame(annexB: ByteArray) {
+    private fun decodeFrame(annexB: ByteArray, length: Int) {
         // Re-attach to the live Surface if it changed (the app was backgrounded and returned, so the
         // SurfaceView made a new Surface). Without this, video stays black after foregrounding.
         val liveSurface = surfaceProvider()
@@ -258,19 +265,22 @@ class MirrorStreamServer(
         if (awaitingKeyframe) {
             // After a dropped frame the stream is reference-broken; skip until the next IDR so we
             // don't feed the decoder predicted frames with missing references (which smear/blocky).
-            if (!isKeyframe(annexB)) return
+            if (!isKeyframe(annexB, length)) return
             awaitingKeyframe = false
             Logger.i("Mirror: resynced on keyframe after a dropped frame")
         }
-        if (framePtsUs == 0L) Logger.i("Mirror: first video frame fed to decoder (${annexB.size}B)")
-        d.decodeNalUnit(annexB, framePtsUs)
+        if (framePtsUs == 0L) Logger.i("Mirror: first video frame fed to decoder (${length}B)")
+        d.decodeNalUnit(annexB, framePtsUs, length)
         framePtsUs += FRAME_INTERVAL_US
     }
 
-    /** True if the Annex-B frame contains an IDR NAL unit (type 5) — a decodable resync point. */
-    private fun isKeyframe(annexB: ByteArray): Boolean {
+    /**
+     * True if the Annex-B frame contains an IDR NAL unit (type 5) — a decodable resync point.
+     * Only the first [length] bytes of [annexB] are examined.
+     */
+    private fun isKeyframe(annexB: ByteArray, length: Int): Boolean {
         var i = 0
-        while (i + 3 < annexB.size) {
+        while (i + 3 < length) {
             if (annexB[i].toInt() == 0 && annexB[i + 1].toInt() == 0 && annexB[i + 2].toInt() == 1) {
                 if ((annexB[i + 3].toInt() and 0x1F) == 5) return true   // IDR slice
                 i += 3
@@ -349,10 +359,10 @@ class MirrorStreamServer(
          *
          * In the companion, and `internal`, so it is testable without opening a socket.
          */
-        internal fun isDisposable(annexB: ByteArray): Boolean {
+        internal fun isDisposable(annexB: ByteArray, length: Int = annexB.size): Boolean {
             var sawSlice = false
             var i = 0
-            while (i + 3 < annexB.size) {
+            while (i + 3 < length) {
                 if (annexB[i].toInt() == 0 && annexB[i + 1].toInt() == 0 && annexB[i + 2].toInt() == 1) {
                     val header = annexB[i + 3].toInt()
                     when (header and 0x1F) {

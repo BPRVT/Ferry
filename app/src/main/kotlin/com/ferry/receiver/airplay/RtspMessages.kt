@@ -6,19 +6,42 @@ package com.ferry.receiver.airplay
  * WHY: Parsing the raw TCP stream into a structured object lets each RTSP method handler
  * work with clean typed data instead of string manipulation.
  *
- * @param method  The RTSP method (e.g., "OPTIONS", "ANNOUNCE", "RECORD")
- * @param uri     The request URI (e.g., "rtsp://192.168.1.1/ferry")
- * @param headers All headers as a key→value map (keys are case-sensitive per RFC 2326)
- * @param body    The request body text (empty string if Content-Length was 0 or absent)
+ * [bodyBytes] is the wire body and the authoritative form; [body] is a UTF-8 view of it, decoded
+ * on first access.
+ *
+ * The decode is lazy because most bodies are not text. A photo PUT carries up to
+ * [PhotoHandler.MAX_PHOTO_BYTES] (25 MB) of JPEG, and the binary-plist handshake bodies are not
+ * text either. Decoding those eagerly built a multi-megabyte String of U+FFFD replacement
+ * characters that nothing ever read — pure transient garbage on a heap-constrained TV, and a lever
+ * a peer could pull deliberately. Text handlers (SDP, headers) still get [body] transparently.
+ *
+ * @param method    The RTSP method (e.g., "OPTIONS", "ANNOUNCE", "RECORD")
+ * @param uri       The request URI (e.g., "rtsp://192.168.1.1/ferry")
+ * @param headers   All headers as a key→value map (keys are case-sensitive per RFC 2326)
+ * @param bodyBytes The raw request body (empty if Content-Length was 0 or absent)
  */
-data class RtspRequest(
+class RtspRequest(
     val method: String,
     val uri: String,
     val headers: Map<String, String>,
-    val body: String,
-    val bodyBytes: ByteArray = body.toByteArray(Charsets.UTF_8),
+    val bodyBytes: ByteArray = ByteArray(0),
     val protocol: String = "RTSP/1.0"
-)
+) {
+    /** UTF-8 view of [bodyBytes], decoded on first access and cached. */
+    val body: String by lazy(LazyThreadSafetyMode.NONE) { String(bodyBytes, Charsets.UTF_8) }
+
+    /** Convenience for tests and callers that build a request from text. */
+    constructor(
+        method: String,
+        uri: String,
+        headers: Map<String, String>,
+        body: String,
+        protocol: String = "RTSP/1.0"
+    ) : this(method, uri, headers, body.toByteArray(Charsets.UTF_8), protocol)
+
+    override fun toString(): String =
+        "RtspRequest($method $uri $protocol, ${headers.size} headers, ${bodyBytes.size}B body)"
+}
 
 /**
  * RtspResponse — Represents an RTSP response to send back to the AirPlay sender.

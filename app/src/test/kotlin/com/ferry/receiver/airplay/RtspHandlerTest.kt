@@ -274,7 +274,6 @@ class RtspHandlerTest {
                 method = "PUT",
                 uri = "/photo",
                 headers = mapOf("Content-Type" to "image/jpeg"),
-                body = "",
                 bodyBytes = JPEG_BYTES,
                 protocol = "HTTP/1.1"
             )
@@ -293,7 +292,6 @@ class RtspHandlerTest {
                 method = "PUT",
                 uri = "/photo",
                 headers = mapOf("Content-Type" to "image/jpeg"),
-                body = "not an image",
                 bodyBytes = "not an image".toByteArray(),
                 protocol = "HTTP/1.1"
             )
@@ -341,7 +339,7 @@ class RtspHandlerTest {
         PlistCodec.encode(mapOf("streams" to streamTypes.map { mapOf("type" to it.toLong()) }))
 
     private fun teardownRequest(bytes: ByteArray) =
-        RtspRequest(method = "TEARDOWN", uri = "", headers = emptyMap(), body = "", bodyBytes = bytes)
+        RtspRequest(method = "TEARDOWN", uri = "", headers = emptyMap(), bodyBytes = bytes)
 
     companion object {
         // Minimal valid SDP with H.264 video + AAC-ELD audio (base64 SPS/PPS included)

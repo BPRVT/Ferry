@@ -69,6 +69,12 @@ object RtpInterleaved {
     private const val MAX_RTP_FRAME_BYTES = 2 * 1024 * 1024  // 2 MB
 
     /**
+     * Cap on a single FU-A-reassembled NAL unit. Comfortably above any real 1080p/1440p keyframe,
+     * and bounded so a sender that never sets the FU-A end bit cannot grow the accumulator forever.
+     */
+    private const val MAX_NAL_UNIT_BYTES = 4 * 1024 * 1024    // 4 MB
+
+    /**
      * Reads RTP interleaved frames from [inputStream] until the connection ends.
      *
      * SECURITY: Frame length is capped at [MAX_RTP_FRAME_BYTES]. Oversized frames
@@ -99,7 +105,7 @@ object RtpInterleaved {
                 // RTSP keeps-alive may send OPTIONS between RTP frames.
                 // If the byte is not '$', skip until we find one.
                 if (marker != INTERLEAVED_MARKER) {
-                    Logger.v("RtpInterleaved: skipping non-$ byte 0x${marker.toString(16)}")
+                    Logger.v { "RtpInterleaved: skipping non-$ byte 0x${marker.toString(16)}" }
                     continue
                 }
 
@@ -257,6 +263,15 @@ object RtpInterleaved {
         // Append the fragment data (skip FU indicator byte + FU header byte)
         val fragmentStart = payloadOffset + 2
         if (fragmentStart < rtpFrame.size) {
+            // SECURITY: bound reassembly. Nothing in the FU-A format obliges a sender to ever set
+            // the E (end) bit, so a peer that sends a start fragment and then middle fragments
+            // forever grew this buffer until the heap died. A NAL unit larger than this is not a
+            // real frame from any sender we support, so treat it as a broken/hostile stream and
+            // discard — the decoder resyncs at the next keyframe.
+            if (accumulator.size() + (rtpFrame.size - fragmentStart) > MAX_NAL_UNIT_BYTES) {
+                Logger.w("RtpInterleaved: FU-A reassembly exceeded $MAX_NAL_UNIT_BYTES B — discarding")
+                return null
+            }
             accumulator.write(rtpFrame, fragmentStart, rtpFrame.size - fragmentStart)
         }
 

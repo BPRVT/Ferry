@@ -30,12 +30,32 @@ object Logger {
     fun v(message: String) = Timber.v(message)
 
     /**
+     * Verbose log whose message is only built if something is listening.
+     *
+     * Prefer this on any path that runs per frame, per packet, or per byte. The [String] overload
+     * evaluates its argument at the call site, so in release — where [com.ferry.receiver.FerryApp]
+     * deliberately plants no tree — the interpolation still allocates a StringBuilder and a String
+     * that Timber then throws away. That is invisible on a lifecycle event and expensive in a loop:
+     * RtpInterleaved's resync loop calls this once per skipped *byte*.
+     *
+     * Inline + lambda means the message expression is never evaluated when no tree is planted.
+     */
+    inline fun v(message: () -> String) {
+        if (Timber.treeCount > 0) Timber.v(message())
+    }
+
+    /**
      * Logs a debug message (development-time information).
      * Only emitted in debug builds.
      *
      * @param message The log message.
      */
     fun d(message: String) = Timber.d(message)
+
+    /** Debug log whose message is only built if a tree is planted. See [v] for why. */
+    inline fun d(message: () -> String) {
+        if (Timber.treeCount > 0) Timber.d(message())
+    }
 
     /**
      * Logs an informational message (key lifecycle events, state changes).

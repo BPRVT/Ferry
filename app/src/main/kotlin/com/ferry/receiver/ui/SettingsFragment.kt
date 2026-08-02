@@ -16,6 +16,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.ferry.receiver.BuildConfig
 import com.ferry.receiver.R
+import com.ferry.receiver.airplay.handshake.PairingStore
 import com.ferry.receiver.settings.AppSettings
 import com.ferry.receiver.settings.SettingsRepository
 import com.ferry.receiver.util.Logger
@@ -200,7 +201,17 @@ class SettingsFragment : Fragment() {
         setToggleListener(rowMiracast)     { enabled -> save { it.copy(miracastEnabled = enabled) } }
         setToggleListener(rowCast)         { enabled -> save { it.copy(castEnabled = enabled) } }
         setToggleListener(rowMirrorAudio)  { enabled -> saveAndRestart { it.copy(mirrorAudioEnabled = enabled) } }
-        setToggleListener(rowPinAuth)      { enabled -> saveAndRestart { it.copy(airPlayPinAuthEnabled = enabled) } }
+        setToggleListener(rowPinAuth)      { enabled ->
+            // Toggling PIN auth clears the pair-setup lockout.
+            //
+            // The lockout is persistent and, by design, only a *successful* pairing resets it. That
+            // is the right rule against a guesser, but it leaves the owner with no way back if
+            // pairing fails ten times for a reason that is not a wrong PIN — so this toggle is the
+            // deliberate owner-present escape hatch. Reaching it requires physical access to the TV,
+            // which a remote guesser does not have.
+            PairingStore(requireContext()).resetFailedAttempts()
+            saveAndRestart { it.copy(airPlayPinAuthEnabled = enabled) }
+        }
         setToggleListener(rowStartOnBoot)  { enabled -> save { it.copy(startOnBoot = enabled) } }
         setToggleListener(rowDebugOverlay) { enabled -> save { it.copy(showDebugOverlay = enabled) } }
         setToggleListener(rowForceHighRes) { enabled -> save { it.copy(forceHighResolution = enabled) } }

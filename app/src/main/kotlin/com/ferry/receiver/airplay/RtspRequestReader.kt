@@ -19,8 +19,22 @@ internal class RtspRequestReader(
      * Returns null on clean EOF, malformed input, or payloads over the configured limits.
      */
     fun read(inputStream: InputStream): RtspRequest? {
-        val requestLine = readLine(inputStream) ?: return null
-        if (requestLine.isBlank()) return read(inputStream)
+        // Skip leading blank lines (RFC 2326 tolerates them between messages), but iteratively and
+        // with a hard cap.
+        //
+        // SECURITY: this used to recurse — `if (requestLine.isBlank()) return read(inputStream)`.
+        // Kotlin does not tail-optimise that, so a peer sending a few thousand newlines produced a
+        // stack frame each and killed the connection thread with StackOverflowError. A loop cannot
+        // overflow, and the cap stops a peer holding the thread open on blank lines forever.
+        var requestLine = readLine(inputStream) ?: return null
+        var blanks = 0
+        while (requestLine.isBlank()) {
+            if (++blanks > MAX_LEADING_BLANK_LINES) {
+                Logger.w("RTSP: too many blank lines before a request line — rejecting")
+                return null
+            }
+            requestLine = readLine(inputStream) ?: return null
+        }
 
         val parts = requestLine.split(" ")
         if (parts.size < 3) {
@@ -38,7 +52,6 @@ internal class RtspRequestReader(
             method = method,
             uri = uri,
             headers = headers,
-            body = String(bodyBytes, Charsets.UTF_8),
             bodyBytes = bodyBytes,
             protocol = protocol
         )
@@ -105,5 +118,10 @@ internal class RtspRequestReader(
             sb.append(b.toChar())
             if (sb.length > maxMessageBytes) return null
         }
+    }
+
+    private companion object {
+        /** Generous for any real sender; bounded so blank lines cannot occupy a thread indefinitely. */
+        const val MAX_LEADING_BLANK_LINES = 64
     }
 }

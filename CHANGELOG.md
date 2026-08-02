@@ -11,6 +11,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.5] - 2026-08-02
+
+### Security
+
+- **PIN authentication is now ON by default.** Ferry listens on every interface
+  and has no transport authentication of its own, so off-by-default meant any
+  device that could reach the LAN — a guest, an untrusted IoT device on the same
+  subnet — could put arbitrary video on the screen. Existing installs that have
+  explicitly saved a value keep it; only fresh installs and untouched settings
+  pick up the new default.
+
+  Toggling the setting now also clears the pair-setup lockout counter. The
+  lockout is deliberately persistent and normally only a *successful* pairing
+  resets it, which is right against a guesser but leaves the owner stranded if
+  pairing fails ten times for any other reason. Reaching the toggle needs
+  physical access to the TV, which a remote attacker does not have.
+
+- **Fixed a remote stack-overflow DoS in the RTSP reader.** `RtspRequestReader`
+  recursed once per blank line before a request line; Kotlin does not
+  tail-optimise that, so a peer sending a few thousand newlines exhausted the
+  stack and killed the connection thread. Now an iterative skip with a hard cap.
+  Reachable pre-pairing from any LAN device.
+
+- **Fixed an unbounded FU-A reassembly buffer (remote OOM).** Nothing in the
+  FU-A format obliges a sender to ever set the end bit, so a start fragment
+  followed by endless middle fragments grew the accumulator until the heap died.
+  Reassembly is now capped at 4 MB — far above any real keyframe — and an
+  over-long reassembly is discarded, with the decoder resyncing at the next
+  keyframe.
+
+- **Request bodies are no longer eagerly decoded as UTF-8.** Every request body
+  was converted to a `String` on parse, including photo PUTs of up to 25 MB of
+  JPEG. That produced a multi-megabyte run of replacement characters that no
+  handler ever read — wasted heap on a constrained device, and a lever a peer
+  could pull deliberately. `RtspRequest.body` is now decoded lazily on first
+  access; `bodyBytes` remains the authoritative wire form.
+
+### Changed
+
+- AVCC → Annex-B conversion for mirroring video is now done **in place**. An
+  AVCC length prefix and an Annex-B start code are both exactly 4 bytes, so the
+  conversion is a pure overwrite and needs no second buffer. This removes a
+  `ByteArrayOutputStream` and its `toByteArray()` copy per frame — at 60 fps,
+  two large short-lived allocations a frame on a device with very little GC
+  headroom.
+
+- Verbose and debug logging on per-frame, per-packet and per-byte paths no
+  longer builds its message string in release builds. `Logger.v`/`Logger.d` gained
+  inline lambda overloads that skip evaluation when no Timber tree is planted
+  (release plants none). The worst case was `RtpInterleaved`'s resync loop, which
+  allocated a string for every skipped *byte*.
+
+---
+
 ## [2.0.4] - 2026-08-02
 
 ### Changed
