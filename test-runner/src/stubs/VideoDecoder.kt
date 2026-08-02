@@ -21,7 +21,9 @@ class VideoDecoder(outputSurface: Any?) {
     var isHealthy = true
 
     fun initialize(sps: ByteArray, pps: ByteArray, width: Int, height: Int) {}
-    fun decodeNalUnit(nalUnit: ByteArray, presentationTimeUs: Long = 0L) {}
+    // Signature must track the real VideoDecoder: MirrorStreamServer passes an explicit length
+    // because the AVCC→Annex-B conversion is done in place and the buffer may have a tail.
+    fun decodeNalUnit(nalUnit: ByteArray, presentationTimeUs: Long = 0L, length: Int = nalUnit.size) {}
     fun release() {}
 
     companion object {

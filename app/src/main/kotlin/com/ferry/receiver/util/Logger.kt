@@ -22,6 +22,21 @@ import timber.log.Timber
 object Logger {
 
     /**
+     * Whether anything is actually listening to verbose/debug logs.
+     *
+     * Set by [com.ferry.receiver.FerryApp] when it plants a tree — which it does only in debug
+     * builds. The lambda-taking [v] and [d] overloads check this before building their message.
+     *
+     * Deliberately a plain flag rather than Timber's own tree count: the app module and the
+     * standalone `test-runner` module pin different Timber majors, where that API is a property in
+     * one and a method in the other. Owning the flag keeps this file compiling under both. It stays
+     * false in the test runner, which is correct — Timber swallows the calls there anyway.
+     */
+    @JvmStatic
+    @Volatile
+    var chattyLoggingEnabled: Boolean = false
+
+    /**
      * Logs a verbose message (very detailed, for debugging only).
      * Only emitted in debug builds.
      *
@@ -41,7 +56,7 @@ object Logger {
      * Inline + lambda means the message expression is never evaluated when no tree is planted.
      */
     inline fun v(message: () -> String) {
-        if (Timber.treeCount > 0) Timber.v(message())
+        if (chattyLoggingEnabled) Timber.v(message())
     }
 
     /**
@@ -54,7 +69,7 @@ object Logger {
 
     /** Debug log whose message is only built if a tree is planted. See [v] for why. */
     inline fun d(message: () -> String) {
-        if (Timber.treeCount > 0) Timber.d(message())
+        if (chattyLoggingEnabled) Timber.d(message())
     }
 
     /**

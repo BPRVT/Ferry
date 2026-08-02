@@ -1,6 +1,7 @@
 package com.ferry.receiver
 
 import android.app.Application
+import com.ferry.receiver.util.Logger
 import timber.log.Timber
 
 /**
@@ -38,6 +39,9 @@ class FerryApp : Application() {
         if (BuildConfig.DEBUG) {
             // Debug tree: logs everything, shows file names and line numbers
             Timber.plant(Timber.DebugTree())
+            // Lets Logger's lambda overloads know a tree exists, so hot paths (per frame, per
+            // packet, per byte) stop building message strings that release would only discard.
+            Logger.chattyLoggingEnabled = true
         }
         // In release builds, we deliberately plant no tree to avoid
         // exposing debug information. Critical errors use android.util.Log directly.
