@@ -1,4 +1,4 @@
-<img src="docs/assets/ferry-icon.png" alt="Ferry icon" width="64">
+<img src="docs/assets/ferry-banner.png" alt="Ferry — AirPlay, Miracast, Cast" width="100%">
 
 # Ferry
 
