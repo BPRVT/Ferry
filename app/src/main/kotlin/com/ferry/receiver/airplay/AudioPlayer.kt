@@ -3,7 +3,9 @@ package com.ferry.receiver.airplay
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import com.ferry.receiver.util.AudioGain
 import com.ferry.receiver.util.Logger
+import com.ferry.receiver.util.LoudnessBoost
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -53,6 +55,14 @@ class AudioPlayer {
     private var decodeSuccesses = 0
     private var decodeHealthDecided = false
     @Volatile private var muted = false
+
+    // Playback gain (0..1) from the sender's AirPlay volume, plus the optional user boost.
+    //
+    // This path had NO volume handling at all until now: the RTSP `volume` parameter was routed
+    // only to the mirroring audio server, so on the legacy RAOP path — which is what Apple Music
+    // actually uses — the sender's volume slider did nothing whatsoever.
+    @Volatile private var volumeGain = 1f
+    private val boost = LoudnessBoost()
 
     /**
      * Initializes the AudioPlayer with the stream parameters from the SDP.
@@ -155,11 +165,27 @@ class AudioPlayer {
 
             // Step 4: Write to AudioTrack for playback
             // WRITE_NON_BLOCKING returns immediately if the buffer is full (prevents stalls)
-            audioTrack?.write(pcm, 0, pcm.size, AudioTrack.WRITE_NON_BLOCKING)
+            val track = audioTrack ?: return
+            // Cheap no-op unless the user just changed the setting, so the boost applies to audio
+            // already playing rather than at the next session. Same thread throughout (this method
+            // only ever runs on the UDP receive thread), which is what [LoudnessBoost] requires.
+            boost.sync(track.audioSessionId, StreamStats.audioBoostDb)
+            track.write(pcm, 0, pcm.size, AudioTrack.WRITE_NON_BLOCKING)
 
         } catch (e: Exception) {
             Logger.e("Error playing audio packet", e)
         }
+    }
+
+    /**
+     * Sets playback volume from the sender's AirPlay volume (−30 dB … 0 dB, or ≤ −144 = mute).
+     *
+     * Wired up as part of the same change that added [volumeGain] — before it, this path ignored
+     * the sender's volume entirely. See [AudioGain] for why the conversion is not a linear remap.
+     */
+    fun setVolume(airplayVolume: Float) {
+        volumeGain = AudioGain.amplitudeFor(airplayVolume)
+        runCatching { audioTrack?.setVolume(volumeGain) }
     }
 
     /**
@@ -173,6 +199,8 @@ class AudioPlayer {
     fun release() {
         Logger.d("Releasing AudioPlayer")
         try {
+            // The boost effect is attached to the track's audio session, so it goes first.
+            boost.release()
             audioTrack?.stop()
             audioTrack?.release()
         } catch (e: Exception) {
@@ -188,6 +216,7 @@ class AudioPlayer {
             decodeSuccesses = 0
             decodeHealthDecided = false
             muted = false
+            volumeGain = 1f
         }
     }
 
@@ -268,6 +297,9 @@ class AudioPlayer {
             }
             .build()
 
+        // Re-apply any volume the sender already sent — SET_PARAMETER can arrive before the track
+        // exists, and the gain must survive that ordering rather than silently reverting to unity.
+        audioTrack!!.setVolume(volumeGain)
         audioTrack!!.play()
         val bytesPerSec = sampleRate * channels * 2
         Logger.d("AudioTrack initialized: ${sampleRate}Hz, $channels ch, buffer=$bufferSize bytes " +

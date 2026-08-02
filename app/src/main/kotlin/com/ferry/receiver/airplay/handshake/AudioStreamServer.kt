@@ -8,7 +8,9 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import com.ferry.receiver.airplay.StreamStats
+import com.ferry.receiver.util.AudioGain
 import com.ferry.receiver.util.Logger
+import com.ferry.receiver.util.LoudnessBoost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -55,6 +57,10 @@ class AudioStreamServer(
     // Playback gain (0..1), set from the sender's AirPlay volume. Applied to the AudioTrack and
     // re-applied if the track is recreated. Starts at full.
     @Volatile private var volumeGain = 1f
+
+    // Optional user boost (Settings → Audio boost). Owned and touched only by the playback thread,
+    // which is also the sole owner of [audioTrack] — see [runPlayback].
+    private val boost = LoudnessBoost()
 
     // Reused across packets: decryptPacket runs only on the playback thread, so one Cipher
     // instance is safe and avoids a Cipher.getInstance allocation on every packet (~92/s).
@@ -279,6 +285,9 @@ class AudioStreamServer(
             initAudioTrack()
             while (running) {
                 val payload = frameQueue.poll(200, TimeUnit.MILLISECONDS) ?: continue
+                // Cheap no-op unless the user just changed the setting, so the boost applies to
+                // audio already playing rather than at the next session.
+                audioTrack?.let { boost.sync(it.audioSessionId, StreamStats.audioBoostDb) }
                 try {
                     val decrypted = decryptPacket(payload)
                     if (alac != null) playAlacFrame(decrypted) else decodeFrame(decrypted)
@@ -290,6 +299,8 @@ class AudioStreamServer(
             if (running) Logger.e("Audio playback error", e)
         } finally {
             // Release on the same thread that used the codec — never cross-thread (avoids SIGABRT).
+            // The boost effect is attached to the track's session, so it goes first.
+            boost.release()
             runCatching { codec?.stop() }
             runCatching { codec?.release() }
             runCatching { alac?.close() }
@@ -374,9 +385,14 @@ class AudioStreamServer(
         Logger.i("Audio decoder: ${if (isAacLc) "AAC-LC" else "AAC-ELD"} ${sampleRate}Hz x$channels (ct=$codecType)")
     }
 
-    /** Sets playback volume from the sender's AirPlay volume (−30 dB … 0 dB, or ≤ −144 = mute). */
+    /**
+     * Sets playback volume from the sender's AirPlay volume (−30 dB … 0 dB, or ≤ −144 = mute).
+     *
+     * The dB → amplitude conversion lives in [AudioGain]; it used to be a linear remap here, which
+     * made the middle of the sender's slider roughly 9 dB too loud. See [AudioGain] for the table.
+     */
     fun setVolume(airplayVolume: Float) {
-        volumeGain = if (airplayVolume <= -144f) 0f else ((airplayVolume + 30f) / 30f).coerceIn(0f, 1f)
+        volumeGain = AudioGain.amplitudeFor(airplayVolume)
         runCatching { audioTrack?.setVolume(volumeGain) }
     }
 

@@ -20,6 +20,7 @@ import com.ferry.receiver.airplay.StreamStats
 import com.ferry.receiver.airplay.handshake.PairingStore
 import com.ferry.receiver.settings.AppSettings
 import com.ferry.receiver.settings.SettingsRepository
+import com.ferry.receiver.util.AudioGain
 import com.ferry.receiver.util.Logger
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -58,6 +59,8 @@ class SettingsFragment : Fragment() {
     private lateinit var rowMirrorAudio: View
     private lateinit var rowPinAuth: View
     private lateinit var rowSmartFill: View
+    private lateinit var rowAudioBoost: LinearLayout
+    private lateinit var textAudioBoostValue: TextView
     private lateinit var rowStartOnBoot: View
     private lateinit var rowDebugOverlay: View
     private lateinit var rowForceHighRes: View
@@ -97,6 +100,8 @@ class SettingsFragment : Fragment() {
         rowMirrorAudio      = view.findViewById(R.id.row_mirror_audio)
         rowPinAuth          = view.findViewById(R.id.row_pin_auth)
         rowSmartFill        = view.findViewById(R.id.row_smart_fill)
+        rowAudioBoost       = view.findViewById(R.id.row_audio_boost)
+        textAudioBoostValue = view.findViewById(R.id.text_audio_boost_value)
         rowStartOnBoot      = view.findViewById(R.id.row_start_on_boot)
         rowDebugOverlay     = view.findViewById(R.id.row_debug_overlay)
         rowForceHighRes     = view.findViewById(R.id.row_force_high_res)
@@ -175,7 +180,13 @@ class SettingsFragment : Fragment() {
         setToggle(rowStartOnBoot,  settings.startOnBoot)
         setToggle(rowDebugOverlay, settings.showDebugOverlay)
         setToggle(rowForceHighRes, settings.forceHighResolution)
+        textAudioBoostValue.text = boostLabel(settings.audioBoostDb)
     }
+
+    /** "Off" for 0, otherwise "+N dB" — used for both the row value and the picker entries. */
+    private fun boostLabel(db: Int): String =
+        if (db <= 0) getString(R.string.setting_audio_boost_off)
+        else getString(R.string.setting_audio_boost_value, db)
 
     /**
      * Applies [value] to a toggle row.
@@ -226,6 +237,8 @@ class SettingsFragment : Fragment() {
             StreamStats.smartFillEnabled = enabled
             save { it.copy(smartFillEnabled = enabled) }
         }
+
+        rowAudioBoost.setOnClickListener { showAudioBoostDialog() }
 
         rowReset.setOnClickListener { resetSettings() }
     }
@@ -319,6 +332,36 @@ class SettingsFragment : Fragment() {
     }
 
     /**
+     * Shows the audio-boost picker.
+     *
+     * A discrete list rather than a slider: this is a D-pad UI, where a list of a few labelled steps
+     * is far easier to land on than a continuous control, and 3 dB increments are about the
+     * smallest step that reads as a real change anyway.
+     *
+     * The chosen value is pushed to [StreamStats] as well as persisted, so it takes effect on audio
+     * that is *currently playing* — the same pattern smart fill uses, and for the same reason: you
+     * can only judge "is this loud enough now?" while listening to it.
+     */
+    private fun showAudioBoostDialog() {
+        val steps = AudioGain.BOOST_STEPS
+        val labels = steps.map { boostLabel(it) }.toTypedArray<CharSequence>()
+        val current = steps.indexOf(StreamStats.audioBoostDb).coerceAtLeast(0)
+
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.setting_audio_boost)
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                val chosen = steps[which]
+                StreamStats.audioBoostDb = chosen
+                textAudioBoostValue.text = boostLabel(chosen)
+                save { it.copy(audioBoostDb = chosen) }
+                Logger.i("Audio boost set to ${boostLabel(chosen)}")
+                dialog.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /**
      * Resets all settings to defaults and repopulates the UI.
      * TODO: Add a confirmation dialog before resetting.
      */
@@ -326,6 +369,11 @@ class SettingsFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             settingsRepository.resetToDefaults()
             val defaults = AppSettings.DEFAULT
+            // Push the live-applied settings back too. populateUI only repaints the rows; without
+            // these, a reset would leave the running session on the old boost / fill behaviour
+            // while the UI claimed otherwise.
+            StreamStats.audioBoostDb = defaults.audioBoostDb
+            StreamStats.smartFillEnabled = defaults.smartFillEnabled
             populateUI(defaults)
             Logger.i("Settings reset to defaults")
         }

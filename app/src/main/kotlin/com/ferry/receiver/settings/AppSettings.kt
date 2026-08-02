@@ -105,7 +105,20 @@ data class AppSettings(
      * source loses a quarter of the screen to side bars under a plain fit; smart fill trades a
      * controlled slice of the top and bottom for most of that back.
      */
-    val smartFillEnabled: Boolean = true
+    val smartFillEnabled: Boolean = true,
+
+    // ─── Audio ─────────────────────────────────────────────────────────────
+    /**
+     * Extra playback gain in decibels, 0 (off) to [com.ferry.receiver.util.AudioGain.MAX_BOOST_DB].
+     *
+     * For sources that are simply quiet — the TV is already turned up and it still isn't enough.
+     * Applied via [com.ferry.receiver.util.LoudnessBoost], which compresses rather than plainly
+     * scaling, so boosted loud passages don't clip.
+     *
+     * Defaults to 0: this is a correction for a specific problem, not something every stream wants,
+     * and any non-zero value costs some dynamic range.
+     */
+    val audioBoostDb: Int = 0
 ) {
 
     /** Advertised mirroring display size: 2560×1440 when [forceHighResolution], else 1920×1080. */

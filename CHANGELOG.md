@@ -11,6 +11,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.1.0] - 2026-08-02
+
+### Added
+
+- **Audio boost** (Settings → Audio boost; Off by default, then +3/+6/+9/+12 dB).
+  For sources that are simply quiet — the TV is already turned up and it still
+  isn't enough.
+
+  It could not be built on `AudioTrack.setVolume`, which is capped at unity and
+  can therefore only ever make things quieter. The gain comes from the platform's
+  `LoudnessEnhancer` instead, which applies it down in the audio HAL and
+  *compresses* rather than plainly scaling, so a boosted loud passage doesn't
+  clip into distortion the way a naive multiply would. Both audio paths get it.
+
+  Like smart fill, the setting applies to audio that is already playing rather
+  than at the next session — you can only judge "is this loud enough now?" while
+  listening to it.
+
+### Fixed
+
+- **The sender's volume slider was mapped linearly onto a decibel scale.** AirPlay
+  reports volume in dB (−30 … 0); `AudioTrack.setVolume` takes a linear amplitude.
+  Those were being treated as the same scale, so the conversion was correct only
+  at the two endpoints:
+
+  | sender slider | dB    | correct | was   | error    |
+  |---------------|-------|---------|-------|----------|
+  | max           | 0     | 1.000   | 1.000 | none     |
+  | three-quarter | −7.5  | 0.422   | 0.750 | +5.0 dB  |
+  | middle        | −15   | 0.178   | 0.500 | +9.0 dB  |
+  | quarter       | −22.5 | 0.075   | 0.250 | +10.5 dB |
+  | min           | −30   | 0.032   | 0.000 | −∞       |
+
+  Audibly: a slider that did almost nothing across its top half and then collapsed
+  near the bottom. Because both endpoints were already right, this is invisible if
+  you only ever listen at full volume. Now `10^(dB/20)`, in the new `AudioGain`.
+
+- **The legacy RAOP audio path ignored the sender's volume entirely.** The RTSP
+  `volume` parameter was routed only to the mirroring audio server, so `AudioPlayer`
+  — which is the path an audio-only session such as Apple Music actually runs on —
+  had no volume handling at all, and the phone's slider did nothing. It now
+  receives the same updates, and re-applies the gain if its `AudioTrack` is rebuilt
+  (a volume can arrive before the track exists).
+
+- **Reset to defaults** did not push the live-applied settings back, so a reset
+  left a running session on the old smart-fill behaviour while the UI showed the
+  new one.
+
+---
+
 ## [3.0.0] - 2026-08-02
 
 ### Added

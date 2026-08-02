@@ -231,6 +231,7 @@ class FerryService : Service() {
         // Mirror the debug-overlay setting into the shared stats bus that StreamingScreen reads.
         com.ferry.receiver.airplay.StreamStats.overlayEnabled = settings.showDebugOverlay
         com.ferry.receiver.airplay.StreamStats.smartFillEnabled = settings.smartFillEnabled
+        com.ferry.receiver.airplay.StreamStats.audioBoostDb = settings.audioBoostDb
 
         // Idempotent: a redundant ACTION_START (e.g. the activity being recreated while the
         // foreground service is still alive) must NOT spin up a second AirPlayReceiver competing

@@ -104,6 +104,10 @@
     <string name="setting_force_high_res_subtitle">Sharper mirroring; uses more CPU. Off = 1080p</string>
     <string name="setting_smart_fill">Smart fill</string>
     <string name="setting_smart_fill_subtitle">Fill the screen, trimming a little off the edges. Off = show everything with black bars</string>
+    <string name="setting_audio_boost">Audio boost</string>
+    <string name="setting_audio_boost_subtitle">Make quiet sources louder. Off = play at the original level</string>
+    <string name="setting_audio_boost_off">Off</string>
+    <string name="setting_audio_boost_value">+%1$d dB</string>
     <string name="setting_version">Version</string>
     <string name="setting_reset_defaults">Reset to defaults</string>
 

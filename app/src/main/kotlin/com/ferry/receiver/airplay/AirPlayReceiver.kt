@@ -229,7 +229,10 @@ class AirPlayReceiver(
             onMirrorVideoStop = { stopMirrorVideo() },
             onBufferedAudioStart = { startBufferedAudio() },
             onBufferedAudioStop = { stopBufferedAudio() },
-            onVolume = { v -> audioServer?.setVolume(v) },
+            // Both audio paths, not just the mirroring one: the legacy RAOP player is what an
+            // audio-only session (Apple Music) actually runs on, and it used to receive no volume
+            // updates at all. Whichever path is live gets it; the other is null.
+            onVolume = { v -> audioServer?.setVolume(v); audioPlayer?.setVolume(v) },
             onNowPlayingMetadata = { title, artist, album ->
                 npTitle = title; npArtist = artist; npAlbum = album
                 emitNowPlaying()

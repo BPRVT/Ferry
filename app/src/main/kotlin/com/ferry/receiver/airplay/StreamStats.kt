@@ -25,6 +25,18 @@ object StreamStats {
      */
     @Volatile var smartFillEnabled = true
 
+    /**
+     * Mirrored from [com.ferry.receiver.settings.AppSettings.audioBoostDb] — extra playback gain in
+     * dB, 0 when off.
+     *
+     * Both audio paths re-read this as they play (via
+     * [com.ferry.receiver.util.LoudnessBoost.sync], which is a no-op unless the value changed), so
+     * changing the setting affects audio that is already playing rather than only the next session.
+     * Same reasoning as [smartFillEnabled]: a setting whose whole purpose is "does this sound
+     * better?" has to be judgeable while listening to it.
+     */
+    @Volatile var audioBoostDb = 0
+
     // ─── Video (MirrorStreamServer) ──────────────────────────────────────────
     @Volatile var videoRes = ""        // e.g. "1920x1080"
     @Volatile var videoFps = 0         // frames/sec over the last sample window

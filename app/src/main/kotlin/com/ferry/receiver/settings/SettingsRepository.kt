@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.ferry.receiver.util.Logger
@@ -114,7 +115,8 @@ class SettingsRepository(private val context: Context) {
         showDebugOverlay   = this[Keys.SHOW_DEBUG_OVERLAY]      ?: false,
         forceHighResolution = this[Keys.FORCE_HIGH_RESOLUTION]  ?: false,
         mirrorAudioEnabled = this[Keys.MIRROR_AUDIO_ENABLED]    ?: true,
-        smartFillEnabled   = this[Keys.SMART_FILL]              ?: true
+        smartFillEnabled   = this[Keys.SMART_FILL]              ?: true,
+        audioBoostDb       = com.ferry.receiver.util.AudioGain.clampBoostDb(this[Keys.AUDIO_BOOST_DB] ?: 0)
     )
 
     /**
@@ -132,6 +134,7 @@ class SettingsRepository(private val context: Context) {
         this[Keys.FORCE_HIGH_RESOLUTION] = settings.forceHighResolution
         this[Keys.MIRROR_AUDIO_ENABLED] = settings.mirrorAudioEnabled
         this[Keys.SMART_FILL]           = settings.smartFillEnabled
+        this[Keys.AUDIO_BOOST_DB]       = settings.audioBoostDb
     }
 
     /**
@@ -151,5 +154,6 @@ class SettingsRepository(private val context: Context) {
         val SHOW_DEBUG_OVERLAY  = booleanPreferencesKey("show_debug_overlay")
         val FORCE_HIGH_RESOLUTION = booleanPreferencesKey("force_high_resolution")
         val MIRROR_AUDIO_ENABLED = booleanPreferencesKey("mirror_audio_enabled")
+        val AUDIO_BOOST_DB      = intPreferencesKey("audio_boost_db")
     }
 }
