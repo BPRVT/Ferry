@@ -432,8 +432,19 @@ class AudioStreamServer(
         // Don't ask for an absurd resend range (a huge gap = a real stall, not a few lost packets).
         private const val MAX_RESEND_RANGE = 128
 
-        // Jitter buffer depth between the receive and playback threads (~1 s at 92 frames/s).
-        private const val AUDIO_QUEUE_CAPACITY = 96
+        /**
+         * Jitter buffer depth between the receive and playback threads, ~350 ms at 92 frames/s.
+         *
+         * Was 96 (~1 s). Same reasoning as the video queue: against a live sender a deep queue is
+         * permanent latency, not headroom, because it never gets a chance to drain. It also has to
+         * stay in the same range as MirrorStreamServer.QUEUE_CAPACITY (~267 ms) — when the two
+         * pipelines sit at different depths, that difference *is* the A/V desync, and it moves as
+         * their fill levels move.
+         *
+         * Deliberately the deeper of the two: an underrun here is an audible crackle, whereas a
+         * late video frame is invisible.
+         */
+        private const val AUDIO_QUEUE_CAPACITY = 32
 
         // Sliding window of recently-played RTP sequence numbers for duplicate suppression.
         // ~11 s at 92 packets/s — far longer than any retransmit gap, far shorter than the

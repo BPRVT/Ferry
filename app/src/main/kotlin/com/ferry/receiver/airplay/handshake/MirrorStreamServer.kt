@@ -40,7 +40,13 @@ class MirrorStreamServer(
 ) {
     private sealed class Item
     private class Config(val sps: ByteArray, val pps: ByteArray) : Item()
-    private class Frame(val annexB: ByteArray) : Item()
+
+    /**
+     * @param disposable true when no slice in this frame is used as a reference by any later
+     *   frame (every slice NAL has `nal_ref_idc == 0`), so dropping it under load costs a single
+     *   invisible frame and needs no keyframe resync. Computed once on the reader thread.
+     */
+    private class Frame(val annexB: ByteArray, val disposable: Boolean) : Item()
 
     private val cipher = MirrorCrypto.streamCipher(aesKey, ecdhSecret, streamConnectionId)
     private val serverSocket = ServerSocket(0)            // OS-assigned free port
@@ -58,6 +64,10 @@ class MirrorStreamServer(
     private var framePtsUs = 0L
     private var framesIn = 0
     private var framesDropped = 0
+    // Drops that cost a keyframe resync (the expensive kind). Split out from framesDropped because
+    // the two have wildly different user impact: a disposable drop is invisible, one of these
+    // freezes the picture until iOS next sends an IDR.
+    private var keyframeWaits = 0
     private var lastStatMs = 0L
     // Set by the reader thread when a frame is dropped under load; the decoder thread then skips
     // frames until the next keyframe (IDR) so it never decodes a reference-broken, corrupt stream.
@@ -86,7 +96,16 @@ class MirrorStreamServer(
             Logger.i("MirrorStreamServer listening on data port $dataPort")
             val socket = serverSocket.accept().also { client = it }
             Logger.i("Mirror data connection from ${socket.inetAddress.hostAddress}")
-            val input = socket.getInputStream()
+            // Hand the kernel room to hold a burst while the decoder catches up, and don't let
+            // Nagle sit on our (small, infrequent) writes back to the sender.
+            runCatching {
+                socket.receiveBufferSize = SOCKET_RCVBUF
+                socket.tcpNoDelay = true
+            }.onFailure { Logger.w("Mirror: socket tuning rejected — ${it.message}") }
+            // Buffered: every frame costs at least one read for the 128-byte header, and readFully
+            // loops for the payload. Unbuffered that is a syscall each time, on a modest SoC, at
+            // 60 fps. The buffer is larger than a typical frame so most reads never reach the OS.
+            val input = java.io.BufferedInputStream(socket.getInputStream(), READ_BUFFER)
             val header = ByteArray(128)
             while (running && !socket.isClosed) {
                 if (!readFully(input, header, 128)) break
@@ -103,7 +122,7 @@ class MirrorStreamServer(
                         // ALWAYS advance the AES-CTR keystream, in order, for every video payload —
                         // skipping any packet desyncs the keystream and corrupts all later frames.
                         val annexB = MirrorCrypto.avccToAnnexB(cipher.update(payload))
-                        if (annexB.isNotEmpty()) enqueue(Frame(annexB))
+                        if (annexB.isNotEmpty()) enqueue(Frame(annexB, Companion.isDisposable(annexB)))
                     }
                     1 -> parseConfig(payload)?.let { enqueue(it) }
                     else -> Logger.v("Mirror: ignoring payload type $payloadType ($payloadSize B)")
@@ -117,14 +136,38 @@ class MirrorStreamServer(
         }
     }
 
-    /** Bounded enqueue — if the decoder is behind, drop the oldest item to keep latency bounded. */
+    /**
+     * Bounded enqueue. The queue is deliberately shallow (see [QUEUE_CAPACITY]) so it bounds
+     * latency rather than absorbing a permanent backlog, which means overflow is a normal event
+     * and the *choice of what to drop* is what decides whether the picture survives it.
+     *
+     * Preference order, cheapest damage first:
+     *  1. the incoming frame, if nothing references it — costs one invisible frame;
+     *  2. a queued frame nothing references — same, one frame further back;
+     *  3. the oldest frame, and resync at the next IDR — the only option left when the sender
+     *     marks everything as a reference, and what this always did before.
+     *
+     * Only case 3 sets [awaitingKeyframe], which is expensive: iOS emits IDRs seconds apart, so
+     * every case-3 drop freezes the picture until the next one.
+     */
     private fun enqueue(item: Item) {
         framesIn++
         if (!queue.offer(item)) {
-            queue.poll()
+            if (item is Frame && item.disposable) {
+                framesDropped++                    // 1: refuse the newcomer, break nothing
+                StreamStats.videoQueue = queue.size
+                return
+            }
+            val victim = queue.firstOrNull { it is Frame && it.disposable }
+            if (victim != null && queue.remove(victim)) {
+                framesDropped++                    // 2: evict a frame nothing references
+            } else {
+                queue.poll()                       // 3: nothing disposable — lose a reference
+                framesDropped++
+                awaitingKeyframe = true            // reference-broken — resync at the next IDR
+                keyframeWaits++
+            }
             queue.offer(item)
-            framesDropped++
-            awaitingKeyframe = true        // a frame was lost — resync the decoder at the next IDR
         }
         StreamStats.videoQueue = queue.size
         if (framesIn % 300 == 0) {
@@ -133,7 +176,8 @@ class MirrorStreamServer(
             lastStatMs = now
             StreamStats.videoDropPct = framesDropped * 100 / framesIn
             Logger.i("Video stats: in=$framesIn dropped=$framesDropped " +
-                "(${StreamStats.videoDropPct}%) queue=${queue.size}/$QUEUE_CAPACITY ${StreamStats.videoFps}fps")
+                "(${StreamStats.videoDropPct}%) keyframeWaits=$keyframeWaits " +
+                "queue=${queue.size}/$QUEUE_CAPACITY ${StreamStats.videoFps}fps")
         }
     }
 
@@ -267,8 +311,63 @@ class MirrorStreamServer(
     companion object {
         private const val MAX_PAYLOAD = 8 * 1024 * 1024        // 8 MB sanity cap per frame
         private const val FRAME_INTERVAL_US = 1_000_000L / 60  // monotonic PTS hint (~60fps)
-        private const val QUEUE_CAPACITY = 90                  // ~1.5s @60fps before dropping
+
+        /**
+         * Depth of the reader→decoder handoff, ~267 ms at 60 fps.
+         *
+         * Was 90 (~1.5 s). On a *live* stream a deep queue is not headroom, it is latency: the
+         * sender produces at real time, so a queue that fills during one hiccup never drains and
+         * the backlog is permanent for the rest of the session. Shallow keeps the picture close to
+         * live and lets [enqueue] shed the occasional frame instead, which is only affordable
+         * because that drop now prefers frames nothing references.
+         *
+         * Kept a little under the audio jitter buffer (AudioStreamServer.AUDIO_QUEUE_CAPACITY,
+         * ~350 ms) on purpose — a late video frame is invisible, an audio underrun is an audible
+         * crackle, so audio gets the deeper cushion.
+         */
+        private const val QUEUE_CAPACITY = 16
+
+        private const val READ_BUFFER = 256 * 1024             // > one frame, so most reads miss the OS
+        private const val SOCKET_RCVBUF = 1024 * 1024          // kernel-side burst absorption
+        private const val NAL_SLICE_NON_IDR = 1
+        private const val NAL_SLICE_IDR = 5
         private const val SURFACE_WAIT_TRIES = 50
         private const val SURFACE_WAIT_MS = 100L
+
+        /**
+         * True if no later frame can reference this one, so dropping it under load is invisible
+         * and needs no keyframe resync.
+         *
+         * The NAL header byte is `forbidden_zero(1) | nal_ref_idc(2) | nal_unit_type(5)`. A slice
+         * with `nal_ref_idc == 0` is not retained as a reference picture (H.264 §7.4.1). A frame
+         * is safe to drop only if *every* slice in it is non-reference — one referenced slice and
+         * later frames still predict from it.
+         *
+         * Conservative by construction: a frame carrying no slice NALs at all returns false, and a
+         * sender that marks everything as a reference (some low-delay encoders do) simply never
+         * produces a true here, leaving the old drop-oldest-and-resync behaviour in place.
+         *
+         * In the companion, and `internal`, so it is testable without opening a socket.
+         */
+        internal fun isDisposable(annexB: ByteArray): Boolean {
+            var sawSlice = false
+            var i = 0
+            while (i + 3 < annexB.size) {
+                if (annexB[i].toInt() == 0 && annexB[i + 1].toInt() == 0 && annexB[i + 2].toInt() == 1) {
+                    val header = annexB[i + 3].toInt()
+                    when (header and 0x1F) {
+                        NAL_SLICE_NON_IDR, NAL_SLICE_IDR -> {
+                            sawSlice = true
+                            // nal_ref_idc != 0 → a later frame may predict from this slice.
+                            if ((header and 0x60) != 0) return false
+                        }
+                    }
+                    i += 4
+                } else {
+                    i++
+                }
+            }
+            return sawSlice
+        }
     }
 }

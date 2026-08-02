@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+**Mirroring latency and A/V sync**
+
+Both media paths handed work between threads over a queue sized about a second
+deep — video ~1.5 s, audio ~1.0 s. Against a live sender that is not headroom,
+it is permanent latency: the sender produces at real time, so a queue that fills
+during one hiccup never drains and the backlog persists for the rest of the
+session. The differing depths, drifting independently, were also the A/V desync.
+
+- Video decode queue 90 → 16 frames (~1.5 s → ~267 ms).
+- Audio jitter buffer 96 → 32 frames (~1 s → ~350 ms). Kept deliberately deeper
+  than video: an underrun is an audible crackle, a late video frame is invisible.
+- Frame drops now prefer frames nothing references (`nal_ref_idc == 0`), falling
+  back to the old drop-oldest-and-resync only when the sender marks everything as
+  a reference. Overflow previously *always* forced a wait for the next IDR, and
+  iOS emits those seconds apart — so a shallower queue without this would have
+  traded steady lag for repeated multi-second freezes.
+- `Video stats:` log line now reports `keyframeWaits` separately from total
+  drops. The two have very different impact and only the former is visible.
+- Decoder input-buffer timeout 100 ms → 12 ms. On the decoder thread a 100 ms
+  stall is ~6 frames' worth of arrivals piling up behind it — the wait caused the
+  overflow it was meant to prevent.
+- Mirror data socket: `BufferedInputStream`, `TCP_NODELAY`, and a 1 MB receive
+  buffer. Every frame previously cost a bare syscall for its 128-byte header.
+- `MediaCodec.BufferInfo` hoisted out of `releaseOutputBuffers`, which runs twice
+  per frame — ~120 short-lived allocations a second.
+- `AudioPlayer` (RAOP path) sizes AudioTrack to the buffer floor rather than 2x
+  it, and requests `PERFORMANCE_MODE_LOW_LATENCY` on API 26+.
+
+### Fixed
+
+- `TimingHandler.rtpClockOffsetUs` documented itself as feeding A/V correction in
+  `AudioPlayer`. It never has — nothing outside its own tests reads it. Comment
+  corrected to say so, and to record why a presentation clock is the wrong trade
+  for mirroring: scheduling against one buys sync by *adding* latency.
+
 ---
 
 ## [1.1.1] - 2026-08-01

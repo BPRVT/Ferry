@@ -42,8 +42,8 @@ import java.net.DatagramSocket
  *   Converting from Java millis: add NTP_EPOCH_OFFSET for the seconds, scale % 1000 for fraction.
  *
  * [rtpClockOffsetUs] is updated on every probe response. It represents the estimated
- * offset between our local clock and the sender's RTP clock, in microseconds.
- * [AudioPlayer] uses this to keep audio presentation in sync with video.
+ * offset between our local clock and the sender's RTP clock, in microseconds. Nothing consumes
+ * it — see the note on the property.
  *
  * Usage:
  *   val handler = TimingHandler()
@@ -57,10 +57,20 @@ class TimingHandler {
 
     /**
      * Estimated offset between our local clock and the sender's RTP timestamp clock,
-     * in microseconds. Updated on every received timing probe.
+     * in microseconds. Updated on every received timing probe. 0 means no probes yet.
      *
-     * AudioPlayer uses this to correct presentation timestamps from the RTP stream,
-     * reducing A/V drift. A value of 0 means no probes have been received yet.
+     * NOT CURRENTLY CONSUMED — kept because responding to probes is required by the protocol and
+     * the offset is the by-product. An earlier version of this comment claimed AudioPlayer used it
+     * to correct presentation timestamps; it never has.
+     *
+     * That is deliberate for mirroring. Scheduling playback against a shared clock means holding
+     * frames until their presentation time, which buys sync by *adding* latency — right for
+     * buffered AirPlay audio, where the sender runs seconds ahead, wrong for mirroring, where the
+     * whole game is end-to-end delay. Sync here comes from keeping both pipelines shallow and
+     * comparable instead (MirrorStreamServer.QUEUE_CAPACITY ~267 ms,
+     * AudioStreamServer.AUDIO_QUEUE_CAPACITY ~350 ms).
+     *
+     * If Ferry ever grows buffered audio-only playback, this is the hook to build it on.
      */
     @Volatile
     var rtpClockOffsetUs: Long = 0L

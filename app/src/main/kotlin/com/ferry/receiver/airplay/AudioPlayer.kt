@@ -235,8 +235,12 @@ class AudioPlayer {
             AudioFormat.ENCODING_PCM_16BIT
         )
 
-        // Use 2x the minimum buffer size for more stability
-        val bufferSize = minBufferSize * 2
+        // The floor, not 2x it. This path feeds a live stream, so a deeper buffer is not stability
+        // headroom — it is fixed added latency that never drains, and it shows up as audio trailing
+        // the (immediately-rendered) video. AudioStreamServer's mirroring path already sizes to the
+        // floor for exactly this reason; this brings the RAOP path in line.
+        // (If this underruns/crackles under load, raise back toward minBufferSize * 2.)
+        val bufferSize = minBufferSize
 
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
@@ -254,10 +258,20 @@ class AudioPlayer {
             )
             .setBufferSizeInBytes(bufferSize)
             .setTransferMode(AudioTrack.MODE_STREAM)  // STREAM = for continuous audio
+            .apply {
+                // Ask the audio HAL for its low-latency path. Advisory — the platform ignores it
+                // if the track doesn't qualify — so there is nothing to fall back to.
+                // API 26+; minSdk is 25, hence the guard.
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                }
+            }
             .build()
 
         audioTrack!!.play()
-        Logger.d("AudioTrack initialized: ${sampleRate}Hz, $channels ch, buffer=$bufferSize bytes")
+        val bytesPerSec = sampleRate * channels * 2
+        Logger.d("AudioTrack initialized: ${sampleRate}Hz, $channels ch, buffer=$bufferSize bytes " +
+                 "(~${bufferSize * 1000 / bytesPerSec.coerceAtLeast(1)}ms)")
     }
 
     /**

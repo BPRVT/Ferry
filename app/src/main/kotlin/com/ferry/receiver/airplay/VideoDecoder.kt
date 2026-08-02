@@ -46,6 +46,13 @@ class VideoDecoder(private val outputSurface: Surface) {
         private set
 
     /**
+     * Reused across drains. [releaseOutputBuffers] runs twice per frame and MediaCodec only writes
+     * into this — allocating a fresh one each call was ~120 short-lived objects a second of GC
+     * pressure on a device that has none to spare. Confined to the decoder thread.
+     */
+    private val bufferInfo = MediaCodec.BufferInfo()
+
+    /**
      * Initializes the MediaCodec decoder with the video stream parameters from the SDP.
      *
      * This must be called ONCE before any calls to [decodeNalUnit].
@@ -202,7 +209,6 @@ class VideoDecoder(private val outputSurface: Surface) {
      * @param codec The active MediaCodec instance.
      */
     private fun releaseOutputBuffers(codec: MediaCodec) {
-        val bufferInfo = MediaCodec.BufferInfo()
         var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
 
         while (outputBufferIndex >= 0 || outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
@@ -262,10 +268,14 @@ class VideoDecoder(private val outputSurface: Surface) {
     private fun isPlausibleSize(w: Int, h: Int): Boolean = w in 64..8192 && h in 64..8192
 
     companion object {
-        // How long to wait for an input buffer before dropping (microseconds).
-        // 100ms — generous enough that the decoder rarely has to drop a NAL unit (which would
-        // corrupt the stream), while still bounding stall if the codec is truly wedged.
-        private const val INPUT_BUFFER_TIMEOUT_US = 100_000L
+        // How long to wait for an input buffer before giving up on this NAL unit (microseconds).
+        //
+        // Was 100 ms, on the reasoning that waiting beats dropping. That holds in isolation but not
+        // in context: this runs on the decoder thread, so a 100 ms stall is ~6 frames' worth of
+        // arrivals piling into MirrorStreamServer's queue behind it — the wait *causes* the
+        // overflow it was meant to avoid, and now costs latency in a queue only 16 deep.
+        // 12 ms still rides out normal codec jitter without letting the backlog build.
+        private const val INPUT_BUFFER_TIMEOUT_US = 12_000L
 
         /**
          * Parses the H.264 SPS NAL unit to extract the actual video resolution.
