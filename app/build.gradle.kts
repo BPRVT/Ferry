@@ -28,8 +28,8 @@ android {
         // applicationId is overridden per flavor below
         minSdk = 25           // Lowest common denominator (Fire TV)
         targetSdk = 35
-        versionCode = 6
-        versionName = "2.0.2"
+        versionCode = 7
+        versionName = "2.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "CAST_APP_ID", "\"${castAppId.escapedForBuildConfig()}\"")
@@ -165,6 +165,14 @@ android {
             // Launcher-icon shape is advisory; on Android TV the banner is the primary
             // artwork and the icon is rarely shown (sibling of MonochromeLauncherIcon above).
             "IconLauncherShape",
+            // The launcher banner is deliberately ONE asset in drawable-xhdpi and nowhere
+            // else, so lint sees drawable-xhdpi without its usual density siblings.
+            // Fire OS will not resolve a nodpi banner (it silently falls back to the square
+            // icon) and sizes its tile for 1280x720, so the asset has to be density-qualified
+            // *and* full size. Every device this ships to is a 1080p or 4K TV reporting
+            // xhdpi; downscaled mdpi/hdpi copies would be dead weight, and the risk is a
+            // launcher picking a smaller one. Verified on hardware — see CHANGELOG 2.0.3.
+            "IconMissingDensityFolder",
             "ObsoleteSdkInt",
             "Overdraw",
             "UnusedResources",

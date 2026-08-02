@@ -213,33 +213,40 @@ def main():
         sys.exit("usage: generate-artwork.py <res_dir>")
     res = sys.argv[1]
 
-    # ONE banner, full size, density-independent.
+    # ONE banner: full 1280x720, in a DENSITY BUCKET.
     #
-    # Fire OS asks for 1280x720 for the launcher banner — four times the linear
-    # size of the Android TV 320x180-at-xhdpi figure. 1.1.1 split this into
-    # density buckets sized to the Android TV spec, which handed a Fire TV stick
-    # (xhdpi) a 320x180 image for a tile built to hold 1280x720, so the artwork
-    # sat small inside the tile instead of filling it.
+    # Both halves of this are load-bearing, and each was learned by shipping the
+    # other one wrong to a real Fire TV:
     #
-    # drawable-nodpi is the right home for it: this is a fixed-size asset the
-    # launcher scales into its own slot, not something that should shrink because
-    # the panel reports a lower density. Every TV this runs on is 1080p or 4K, so
-    # there is no small-screen case that a downscaled bucket would serve.
+    #   drawable-nodpi   → the launcher shows no banner at all and falls back to
+    #                      the square icon. Fire OS does not resolve a nodpi
+    #                      banner. (Seen pre-1.1.1 and again in 2.0.2.)
+    #   320x180 at xhdpi → resolves, but that is the Android TV figure. Fire OS
+    #                      sizes its tile for 1280x720, so the artwork sat small
+    #                      inside the tile. (Seen in 1.1.1 through 2.0.1.)
+    #
+    # So: xhdpi, which is what Fire TV sticks report, holding the full-size image.
+    # Unusual by Android TV's dp math — 1280x720 at xhdpi is 640x360dp, far more
+    # than the nominal 160x90dp slot — but the launcher scales it down to fit, and
+    # oversized-and-sharp beats correctly-sized-and-tiny. Other densities resolve
+    # to this bucket and scale; every target here is 1080p or 4K anyway.
     base = make_banner()
-    for stale in ("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"):
-        p = os.path.join(res, f"drawable-{stale}", "app_banner.png")
+    for stale_dir, stale_note in (("nodpi", "not resolved by Fire OS"),
+                                  ("mdpi", ""), ("hdpi", ""), ("xxhdpi", ""),
+                                  ("xxxhdpi", "")):
+        p = os.path.join(res, f"drawable-{stale_dir}", "app_banner.png")
         if os.path.exists(p):
             os.remove(p)
-            print(f"  removed {p}")
+            print(f"  removed {p} {stale_note}".rstrip())
             d = os.path.dirname(p)
             if not os.listdir(d):
                 os.rmdir(d)
 
-    banner_dir = os.path.join(res, "drawable-nodpi")
+    banner_dir = os.path.join(res, "drawable-xhdpi")
     os.makedirs(banner_dir, exist_ok=True)
     banner_path = os.path.join(banner_dir, "app_banner.png")
     base.save(banner_path, "PNG", optimize=True)
-    print(f"  banner  {banner_path} (1280x720)")
+    print(f"  banner  {banner_path} (1280x720, xhdpi)")
 
     # Standard launcher densities (mdpi baseline 48dp).
     for bucket, px in (("mdpi", 48), ("hdpi", 72), ("xhdpi", 96),

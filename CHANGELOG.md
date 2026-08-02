@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.3] - 2026-08-02
+
+### Fixed
+
+- Fire TV launcher banner, for real this time — confirmed against the device
+  rather than against the documentation. Two independent requirements, each of
+  which was learned by shipping the other one wrong:
+  - the banner must live in a **density bucket**; Fire OS does not resolve a
+    `drawable-nodpi` banner and silently falls back to the square launcher icon
+    (this was the pre-1.1.1 behaviour, and 2.0.2 reintroduced it);
+  - it must be **1280x720**, Fire OS's tile size, not the 320x180-at-xhdpi figure
+    from the Android TV guidelines (1.1.1 through 2.0.1 shipped the small one,
+    which resolved but sat small inside the tile).
+
+  Now a single 1280x720 asset in `drawable-xhdpi`, the density Fire TV sticks
+  report. Oversized in dp terms — the launcher scales it down to its slot — which
+  is the right way round, since sharp-and-scaled beats correct-and-tiny.
+
+---
+
 ## [2.0.2] - 2026-08-02
 
 ### Fixed
