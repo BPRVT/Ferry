@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.1] - 2026-08-01
+
+### Fixed
+
+- Fire TV home row showed a stretched launcher icon instead of the banner.
+  `android:banner` was declared only on `<application>`, but Fire OS reads
+  `ActivityInfo.banner` for the leanback entry point and falls back to the square
+  icon — not to the application banner — when the activity has none. Now declared
+  on `MainActivity` as well.
+- The banner shipped in `drawable-nodpi`, so launchers were handed the authored
+  1280x720 image regardless of screen density and squashed it into a slot roughly
+  a quarter that size. It now ships in real density buckets, `xhdpi` being the
+  320x180 that the Android TV and Fire TV guidelines ask for.
+
+### Changed
+
+- README artwork moved to `docs/assets/` instead of pointing into
+  `app/src/main/res/`. GitHub's raw CDN caches by URL, so reusing a resource path
+  across a redesign keeps serving the superseded icon. `tools/generate-artwork.py`
+  emits these alongside the launcher icons so the two cannot drift.
+
+---
+
 ## [1.1.0] - 2026-08-01
 
 ### Changed
