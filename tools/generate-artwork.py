@@ -213,27 +213,33 @@ def main():
         sys.exit("usage: generate-artwork.py <res_dir>")
     res = sys.argv[1]
 
-    # Banner densities. The slot is 160x90dp, so xhdpi is the 320x180 that both
-    # the Android TV and Fire TV docs ask for; the rest are the same layout
-    # resampled so no launcher has to guess a scale factor.
+    # ONE banner, full size, density-independent.
     #
-    # Deliberately NOT drawable-nodpi: a nodpi banner is handed to the launcher
-    # at its authored 1280x720 regardless of screen density, so the home row
-    # gets an image ~4x its slot and squashes it to fit.
+    # Fire OS asks for 1280x720 for the launcher banner — four times the linear
+    # size of the Android TV 320x180-at-xhdpi figure. 1.1.1 split this into
+    # density buckets sized to the Android TV spec, which handed a Fire TV stick
+    # (xhdpi) a 320x180 image for a tile built to hold 1280x720, so the artwork
+    # sat small inside the tile instead of filling it.
+    #
+    # drawable-nodpi is the right home for it: this is a fixed-size asset the
+    # launcher scales into its own slot, not something that should shrink because
+    # the panel reports a lower density. Every TV this runs on is 1080p or 4K, so
+    # there is no small-screen case that a downscaled bucket would serve.
     base = make_banner()
-    stale_nodpi = os.path.join(res, "drawable-nodpi", "app_banner.png")
-    if os.path.exists(stale_nodpi):
-        os.remove(stale_nodpi)
-        print(f"  removed {stale_nodpi}")
+    for stale in ("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"):
+        p = os.path.join(res, f"drawable-{stale}", "app_banner.png")
+        if os.path.exists(p):
+            os.remove(p)
+            print(f"  removed {p}")
+            d = os.path.dirname(p)
+            if not os.listdir(d):
+                os.rmdir(d)
 
-    for bucket, bw in (("mdpi", 160), ("hdpi", 240), ("xhdpi", 320),
-                       ("xxhdpi", 480), ("xxxhdpi", 640)):
-        bh = bw * 9 // 16
-        dd = os.path.join(res, f"drawable-{bucket}")
-        os.makedirs(dd, exist_ok=True)
-        path = os.path.join(dd, "app_banner.png")
-        base.resize((bw, bh), Image.LANCZOS).save(path, "PNG", optimize=True)
-        print(f"  banner  {path} ({bw}x{bh})")
+    banner_dir = os.path.join(res, "drawable-nodpi")
+    os.makedirs(banner_dir, exist_ok=True)
+    banner_path = os.path.join(banner_dir, "app_banner.png")
+    base.save(banner_path, "PNG", optimize=True)
+    print(f"  banner  {banner_path} (1280x720)")
 
     # Standard launcher densities (mdpi baseline 48dp).
     for bucket, px in (("mdpi", 48), ("hdpi", 72), ("xhdpi", 96),

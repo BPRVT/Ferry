@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.2] - 2026-08-02
+
+### Fixed
+
+- Fire TV launcher banner rendered small inside its tile instead of filling it.
+  1.1.1 split the banner into density buckets sized to the Android TV figure
+  (320x180 at xhdpi); Fire OS asks for 1280x720, four times that linear size, so
+  a Fire TV stick was handed a quarter-size image for a full-size tile. Back to a
+  single 1280x720 `drawable-nodpi` asset — a fixed-size image the launcher scales
+  into its own slot, which is what it was before 1.1.1 and what Fire OS expects.
+  The part of 1.1.1 that mattered, `android:banner` on the leanback activity, is
+  unchanged.
+
+---
+
 ## [2.0.1] - 2026-08-02
 
 ### Added
