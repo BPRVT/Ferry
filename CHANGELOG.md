@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.4] - 2026-08-02
+
+### Changed
+
+- Mirroring video decode now runs MediaCodec in **asynchronous mode**. The
+  synchronous design had two costs that were structural rather than incidental:
+
+  - Output was drained only from inside `decodeNalUnit`, so a decoded frame sat
+    undrained until the *next* frame arrived to push it out — one frame of
+    latency built into the shape of the loop, independent of how fast the codec
+    was.
+  - Every frame whose input buffer was not immediately free stalled the decoder
+    thread in `dequeueInputBuffer` for up to 12 ms, against a 16.7 ms budget at
+    60 fps. The stall then backed arrivals up into the 16-deep frame queue, so
+    the wait tended to cause the overflow it was meant to prevent.
+
+  In async mode the codec hands us input buffers as they free up and renders
+  each frame the moment it is decoded, on its own thread. Neither cost remains.
+
+- The decoder now asks for realtime scheduling: `KEY_PRIORITY = 0` and
+  `KEY_OPERATING_RATE = 60` (both API 23+, so they apply on Fire OS 6), plus
+  `KEY_LOW_LATENCY` on API 30+, which disables output reordering. These trade
+  power for latency, which is the correct trade for mirroring — there is no
+  seek or scrub to amortise buffering against, and a frame decoded late is worth
+  less than a frame decoded now.
+
+### Note
+
+- The **Higher resolution (1440p)** setting is best left **off**. It advertises a
+  2560x1440 display to the sender, which is 1.78x the pixels of 1080p through a
+  decoder that is already the bottleneck, and the panel downscales the result
+  anyway. It also only affects macOS senders — iOS mirroring chooses its own
+  geometry regardless.
+
+---
+
 ## [2.0.3] - 2026-08-02
 
 ### Fixed

@@ -2,8 +2,13 @@ package com.ferry.receiver.airplay
 
 import android.media.MediaCodec
 import android.media.MediaFormat
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.view.Surface
 import com.ferry.receiver.util.Logger
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 
 /**
  * VideoDecoder — Hardware H.264 video decoder using Android's MediaCodec API.
@@ -46,11 +51,62 @@ class VideoDecoder(private val outputSurface: Surface) {
         private set
 
     /**
-     * Reused across drains. [releaseOutputBuffers] runs twice per frame and MediaCodec only writes
-     * into this — allocating a fresh one each call was ~120 short-lived objects a second of GC
-     * pressure on a device that has none to spare. Confined to the decoder thread.
+     * Input buffer indices MediaCodec has handed us via [MediaCodec.Callback.onInputBufferAvailable]
+     * but that we have not filled yet.
+     *
+     * In async mode the codec pushes indices here as they free up, so [decodeNalUnit] takes one that
+     * is *already* available instead of asking the codec and blocking. Capacity is well above any
+     * real codec's input buffer count; overflow would just mean discarding a usable index.
      */
-    private val bufferInfo = MediaCodec.BufferInfo()
+    private val availableInputBuffers = ArrayBlockingQueue<Int>(64)
+
+    /**
+     * MediaCodec delivers async callbacks on this thread's Looper. It must not be the main thread
+     * (a stalled UI would stall decode) nor the decoder thread (which blocks in [decodeNalUnit]).
+     */
+    private var callbackThread: HandlerThread? = null
+
+    /**
+     * Async-mode callbacks. The important one is [onOutputBufferAvailable]: it renders each frame
+     * the moment the codec finishes it, on the codec's own thread.
+     *
+     * The previous synchronous design drained output only from inside [decodeNalUnit], so a decoded
+     * frame sat undrained until the *next* frame arrived to push it out — a frame of latency built
+     * into the structure, plus a stall of up to the old input-buffer timeout on every frame whose
+     * buffer was not ready. Neither exists here.
+     */
+    private val decoderCallback = object : MediaCodec.Callback() {
+        override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {
+            // Offer, not put: if we somehow have more free indices than the queue holds, dropping
+            // one is harmless (the codec will hand it back again) and blocking the codec is not.
+            availableInputBuffers.offer(index)
+        }
+
+        override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
+            // Render immediately. We deliberately do NOT schedule a future render time for A/V sync:
+            // this Surface's BufferQueue holds only ~3 frames, so any hold quickly back-pressures the
+            // decoder → the upstream frame queue saturates → big latency + dropped (corrupt) frames.
+            // A/V alignment is handled by keeping the AUDIO path low-latency instead (AudioStreamServer).
+            try {
+                codec.releaseOutputBuffer(index, true)
+            } catch (e: IllegalStateException) {
+                // Raced with release() — the codec is gone. Nothing to render to.
+                Logger.v("VideoDecoder: output buffer released after shutdown (${e.message})")
+            }
+        }
+
+        override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
+            // The decoder parsed the real size from the SPS — authoritative for aspect-fit.
+            publishOutputSize(format)
+        }
+
+        override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
+            // Error state cannot be cleared by reconfigure; MirrorStreamServer watches isHealthy
+            // and builds a fresh decoder.
+            Logger.e("VideoDecoder entered error state — will recreate", e)
+            isHealthy = false
+        }
+    }
 
     /**
      * Initializes the MediaCodec decoder with the video stream parameters from the SDP.
@@ -110,23 +166,47 @@ class VideoDecoder(private val outputSurface: Surface) {
             // NOTE: do NOT set KEY_MAX_WIDTH/HEIGHT here — this SoC's MStar decoder rejects
             // adaptive playback (BadParameter / buffer-count failures) and produces banding.
             // Resolution changes are handled by recreating the decoder in MirrorStreamServer.
+
+            // Mirroring is a realtime workload: a frame decoded late is worth less than a frame
+            // decoded now, and there is no seek/scrub to amortise buffering against. All three
+            // hints below trade power for latency, which is the right trade here.
+            //
+            // KEY_PRIORITY 0 = realtime (default 1 = best-effort). API 23+.
+            setInteger(MediaFormat.KEY_PRIORITY, 0)
+            // Tells the codec the rate we actually need, so its governor holds clocks up instead of
+            // settling at a power-saving operating point and then chasing the stream. API 23+.
+            setInteger(MediaFormat.KEY_OPERATING_RATE, TARGET_FPS)
+            // Disables output reordering — the decoder emits each frame as soon as it is decoded
+            // rather than holding frames to satisfy B-frame display order. Worth several frames of
+            // latency on its own. API 30+; older Fire OS builds simply never take this branch.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            }
         }
 
         // Create the hardware H.264 decoder.
         // "video/avc" is the MIME type for H.264. Android will pick the best
         // available hardware decoder for this format.
-        mediaCodec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        mediaCodec = codec
+
+        // Async mode. setCallback MUST precede configure(). See [callbackHandler] for why this runs
+        // on its own thread rather than the caller's.
+        val thread = HandlerThread("FerryVideoDecoder").also { it.start() }
+        callbackThread = thread
+        codec.setCallback(decoderCallback, Handler(thread.looper))
 
         // Configure the decoder:
         // - format: what the input will look like (H.264, width, height, SPS/PPS)
         // - outputSurface: where decoded frames go (directly to screen — no intermediate copy)
         // - crypto: null (we handle decryption before this point, if needed)
         // - flags: 0 (0 = decoder mode; CONFIGURE_FLAG_ENCODE would be for encoding)
-        mediaCodec!!.configure(format, outputSurface, null, 0)
-        mediaCodec!!.start()
+        codec.configure(format, outputSurface, null, 0)
+        codec.start()
 
         isInitialized = true
-        Logger.i("H.264 decoder initialized successfully")
+        Logger.i("H.264 decoder initialized (async, codec=${runCatching { codec.name }.getOrNull()}, " +
+                 "lowLatency=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.R})")
     }
 
     /**
@@ -153,16 +233,12 @@ class VideoDecoder(private val outputSurface: Surface) {
         }
 
         try {
-            // Drain finished frames FIRST — renders them and frees the pipeline so an input
-            // buffer becomes available. Dropping NAL units corrupts H.264 (loses reference
-            // frames) and causes a black screen until the next keyframe, so we avoid it.
-            releaseOutputBuffers(codec)
+            // Take an input buffer the codec has ALREADY handed us. The brief poll rides out normal
+            // codec jitter; unlike the old dequeueInputBuffer() wait it costs nothing in the common
+            // case, because a free index is almost always sitting in the queue.
+            val inputBufferIndex = availableInputBuffers.poll(INPUT_BUFFER_WAIT_MS, TimeUnit.MILLISECONDS)
 
-            // Wait for an input buffer. Longer than before: on a modest SoC the decoder can
-            // briefly fall behind, and waiting beats dropping (which corrupts the stream).
-            val inputBufferIndex = codec.dequeueInputBuffer(INPUT_BUFFER_TIMEOUT_US)
-
-            if (inputBufferIndex >= 0) {
+            if (inputBufferIndex != null) {
                 // We got an input buffer — fill it with the NAL unit bytes
                 val inputBuffer = codec.getInputBuffer(inputBufferIndex)!!
                 inputBuffer.clear()
@@ -183,46 +259,12 @@ class VideoDecoder(private val outputSurface: Surface) {
                 Logger.v("VideoDecoder: no input buffer available, dropping NAL unit")
             }
 
-            // Release any output buffers that MediaCodec has finished decoding.
-            // render=true means the frame goes to the Surface immediately.
-            releaseOutputBuffers(codec)
-
         } catch (e: IllegalStateException) {
             // MediaCodec is now in the error state and cannot recover — flag for recreation.
             Logger.e("VideoDecoder entered error state — will recreate", e)
             isHealthy = false
         } catch (e: Exception) {
             Logger.e("Error decoding NAL unit", e)
-        }
-    }
-
-    /**
-     * Releases any decoded output buffers back to MediaCodec and renders them to the Surface.
-     *
-     * MediaCodec works asynchronously: we put encoded data in input buffers,
-     * and decoded frames appear in output buffers. We must release each output
-     * buffer back to MediaCodec after rendering, or we'll run out of buffers.
-     *
-     * render=true: the frame is rendered to the Surface (displayed on TV).
-     * render=false: the frame is discarded (used to flush without displaying).
-     *
-     * @param codec The active MediaCodec instance.
-     */
-    private fun releaseOutputBuffers(codec: MediaCodec) {
-        var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
-
-        while (outputBufferIndex >= 0 || outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-            if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                // The decoder parsed the real size from the SPS — authoritative for aspect-fit.
-                publishOutputSize(codec.outputFormat)
-            } else {
-                // Render immediately. We deliberately do NOT schedule a future render time for A/V sync:
-                // this Surface's BufferQueue holds only ~3 frames, so any hold quickly back-pressures the
-                // decoder → the upstream frame queue saturates → big latency + dropped (corrupt) frames.
-                // A/V alignment is handled by keeping the AUDIO path low-latency instead (AudioStreamServer).
-                codec.releaseOutputBuffer(outputBufferIndex, true)
-            }
-            outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
         }
     }
 
@@ -261,6 +303,11 @@ class VideoDecoder(private val outputSurface: Surface) {
         } finally {
             mediaCodec = null
             isInitialized = false
+            // Stop the callback Looper AFTER the codec is gone, so no callback can arrive for a
+            // released codec. quitSafely() lets any in-flight callback finish first.
+            callbackThread?.quitSafely()
+            callbackThread = null
+            availableInputBuffers.clear()
         }
     }
 
@@ -268,14 +315,19 @@ class VideoDecoder(private val outputSurface: Surface) {
     private fun isPlausibleSize(w: Int, h: Int): Boolean = w in 64..8192 && h in 64..8192
 
     companion object {
-        // How long to wait for an input buffer before giving up on this NAL unit (microseconds).
-        //
-        // Was 100 ms, on the reasoning that waiting beats dropping. That holds in isolation but not
-        // in context: this runs on the decoder thread, so a 100 ms stall is ~6 frames' worth of
-        // arrivals piling into MirrorStreamServer's queue behind it — the wait *causes* the
-        // overflow it was meant to avoid, and now costs latency in a queue only 16 deep.
-        // 12 ms still rides out normal codec jitter without letting the backlog build.
-        private const val INPUT_BUFFER_TIMEOUT_US = 12_000L
+        /** Rate hint given to the codec's governor via KEY_OPERATING_RATE. */
+        private const val TARGET_FPS = 60
+
+        /**
+         * How long [decodeNalUnit] waits for a free input buffer index before dropping the frame.
+         *
+         * Much shorter than the 12 ms this needed in synchronous mode. There, the wait *was* the
+         * mechanism for getting a buffer, so it had to cover codec jitter. Here the codec pushes
+         * indices into [availableInputBuffers] as they free up, so in the common case one is already
+         * waiting and the poll returns instantly; this timeout only covers the genuine case of the
+         * decoder being saturated, where dropping promptly beats stalling the decoder thread.
+         */
+        private const val INPUT_BUFFER_WAIT_MS = 4L
 
         /**
          * Parses the H.264 SPS NAL unit to extract the actual video resolution.
