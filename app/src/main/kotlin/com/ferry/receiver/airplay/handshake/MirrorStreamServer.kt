@@ -89,6 +89,9 @@ class MirrorStreamServer(
     // Type-1 config packets whose SPS/PPS matched the running decoder. Counted only to find out
     // whether this sender pairs parameter sets with IDRs — see configureDecoder.
     private var repeatedConfigs = 0
+    // When the current run of skipped-while-resyncing frames began, or 0 if we are not skipping.
+    // Decoder thread only — decodeFrame and configureDecoder both run on it, so no volatile needed.
+    private var skipStreakStartNs = 0L
     private var lastStatMs = 0L
     // Set by the reader thread when a frame is dropped under load; the decoder thread then skips
     // frames until the next keyframe (IDR) so it never decodes a reference-broken, corrupt stream.
@@ -343,8 +346,27 @@ class MirrorStreamServer(
         // After a reference frame goes missing the stream is reference-broken; skip until the next
         // IDR so we don't feed the decoder predicted frames whose references it never received
         // (which is what smears and morphs the picture).
-        val resyncing = awaitingKeyframe
-        if (resyncing && !frame.keyframe) return
+        var resyncing = awaitingKeyframe
+        if (resyncing && !frame.keyframe) {
+            // Bounded, so waiting for a keyframe can never become an indefinite freeze.
+            //
+            // Skipping is the right response to a broken reference chain, but it is only tolerable
+            // while recovery is actually coming. If the IDR does not arrive — the sender defers
+            // keyframes on a static screen, or something re-arms the resync as fast as it clears —
+            // the picture simply stops, with no way back short of restarting the session. That is
+            // what 5.0.0 did on real hardware, and it is worse than the corruption it was avoiding.
+            //
+            // So the skip gives up after [RESYNC_GIVE_UP_MS] and lets frames through again. Brief
+            // artifacts until the next IDR, which is where this was headed anyway; the difference
+            // is that the screen keeps moving and recovers on its own.
+            if (skipStreakStartNs == 0L) skipStreakStartNs = System.nanoTime()
+            if (System.nanoTime() - skipStreakStartNs < RESYNC_GIVE_UP_MS * 1_000_000L) return
+            Logger.w("Mirror: no keyframe for ${RESYNC_GIVE_UP_MS}ms — resuming decode " +
+                     "(brief artifacts expected until the sender's next IDR)")
+            awaitingKeyframe = false
+            resyncing = false
+        }
+        skipStreakStartNs = 0L
         // Sampled before the decode call, which can now block: see [resyncArmSeq].
         val armSeqBefore = resyncArmSeq
 
@@ -368,19 +390,33 @@ class MirrorStreamServer(
             return
         }
 
-        // Dropped inside the decoder — no free input buffer in time. This is a second, independent
-        // drop point from the one in [enqueue], and it used to be invisible to the resync logic
-        // entirely: the queue's careful "did we break a reference?" bookkeeping simply did not
-        // cover frames lost down here.
+        // Dropped inside the decoder — no free input buffer in time. A second, independent drop
+        // point from the one in [enqueue], and one the resync bookkeeping does not cover.
+        //
+        // 5.0.0 armed a keyframe resync here, reasoning that losing a referenced frame leaves the
+        // stream unable to predict correctly. That reasoning is sound and the result was still much
+        // worse, so it is deliberately not done any more.
+        //
+        // Why: arming stops every frame from reaching the decoder until an IDR arrives, and on iOS
+        // that is ~10 seconds away. Drops here are not the rare event the queue's drop policy deals
+        // with — on a decoder that is merely keeping up, they happen often. So each one bought a
+        // ten-second freeze, and the next drop landed moments after recovery. The picture went from
+        // occasionally corrupt to showing roughly one frame every ten seconds, which reads as the
+        // TV having locked up entirely. Reported from a real device against 5.0.0.
+        //
+        // The honest trade: a moving picture with transient artifacts beats a still one. Corruption
+        // here self-heals at the sender's next IDR either way — the difference is only whether the
+        // intervening seconds show something or nothing.
+        //
+        // The drop is still counted, and [KEYFRAME_INPUT_BUFFER_WAIT_MS] still makes losing an
+        // actual IDR far less likely, which is the part that attacks the cause rather than the
+        // symptom.
         decoderDrops++
         StreamStats.videoDecoderDrops = decoderDrops
         if (frame.keyframe) {
             keyframeDrops++
             StreamStats.videoKeyframeDrops = keyframeDrops
         }
-        // Only a frame nothing predicts from is safe to lose silently. Anything else — including an
-        // IDR, which is always a reference — leaves the stream broken until a keyframe lands.
-        if (!frame.disposable) awaitingKeyframe = true
     }
 
     /**
@@ -442,6 +478,18 @@ class MirrorStreamServer(
          * crackle, so audio gets the deeper cushion.
          */
         private const val QUEUE_CAPACITY = 16
+
+        /**
+         * How long the decoder will skip frames waiting for a keyframe before giving up and
+         * decoding whatever arrives.
+         *
+         * A ceiling on how long the picture may sit still. Generous enough that a resync with an
+         * IDR genuinely on the way still completes cleanly, short enough that a resync which is
+         * never going to complete does not read as a crashed TV. Without it, "wait for a keyframe"
+         * has no upper bound at all, and on iOS the next IDR can be ten seconds out or, on a static
+         * screen, considerably more.
+         */
+        private const val RESYNC_GIVE_UP_MS = 3_000L
 
         private const val READ_BUFFER = 256 * 1024             // > one frame, so most reads miss the OS
         private const val SOCKET_RCVBUF = 1024 * 1024          // kernel-side burst absorption

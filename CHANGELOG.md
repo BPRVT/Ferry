@@ -11,6 +11,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.0.1] - 2026-08-03
+
+### Fixed
+
+- **5.0.0 could freeze the picture until the session was restarted. Regression,
+  introduced by 5.0.0, fixed here.**
+
+  5.0.0 started arming a keyframe resync whenever the decoder dropped a frame
+  that later frames predict from. The reasoning was right — that frame's absence
+  does break prediction — and the result was much worse than the problem.
+
+  Arming a resync stops *every* frame reaching the decoder until an IDR arrives,
+  and on iOS that is around ten seconds away. The mistake was assuming these
+  drops are rare. They are not: unlike a queue overflow, a decoder-level drop
+  happens whenever no input buffer frees up in time, which on a decoder that is
+  merely keeping up is often. So each drop bought a ten-second freeze, and the
+  next drop landed moments after recovery. The screen went from occasionally
+  showing artifacts to showing roughly one frame every ten seconds — which reads,
+  correctly, as the TV having locked up, with nothing but stopping and restarting
+  the cast to clear it.
+
+  A decoder-level drop no longer arms a resync. It is still counted, and the
+  keyframe input-buffer priority added in 5.0.0 still stands — that is the half
+  of the change that attacks the cause instead of the symptom, by making the loss
+  of an actual IDR far less likely.
+
+- **Waiting for a keyframe is now bounded, so it can never be an indefinite
+  freeze again.** Skipping frames until an IDR had no upper bound at all. If the
+  IDR never came — a sender deferring keyframes on a static screen, or anything
+  re-arming the resync as fast as it cleared — the picture simply stopped, for
+  good. It now gives up after 3 seconds and lets frames through, accepting brief
+  artifacts until the next IDR rather than a still screen with no way back.
+
+  This is a structural guarantee rather than a fix for one cause: whatever arms a
+  resync, the picture starts moving again within 3 seconds.
+
+### Note
+
+- The trade this release settles: **a moving picture with transient artifacts
+  beats a still one.** Corruption from a lost reference frame self-heals at the
+  sender's next IDR either way. The only thing in question is whether the
+  intervening seconds show something or nothing, and 5.0.0 answered that wrong.
+
+---
+
 ## [5.0.0] - 2026-08-03
 
 ### Fixed
