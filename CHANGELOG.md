@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.0.2] - 2026-08-03
+
+### Fixed
+
+- **The debug overlay did nothing when switched on.** `StreamStats.overlayEnabled`
+  was written in exactly one place — `FerryService`, when the receiver starts —
+  and the Settings toggle only persisted the value. So turning the overlay on had
+  no effect until the service happened to restart, which is indistinguishable
+  from the feature being broken. The toggle now pushes the flag straight to
+  `StreamStats`, the same way smart fill three lines below it always has.
+
+- **The overlay sat inside the TV overscan region.** Its margin was 48 *pixels* —
+  about 2.5% of a 1080p edge, where a television is free to crop 5%. On a set
+  that overscans it was rendered off-screen. Now inset to the documented Android
+  TV safe area (48dp horizontal, 27dp vertical), which is roughly double the old
+  margin at xhdpi.
+
+  Worth recording, since it was the first suspect: this had nothing to do with
+  smart fill. `applyAspectFit` only ever resizes the `SurfaceView`, so cropping
+  the video never touched the overlay.
+
+---
+
 ## [5.0.1] - 2026-08-03
 
 ### Fixed

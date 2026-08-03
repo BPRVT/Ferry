@@ -91,10 +91,21 @@ class StreamingScreen @JvmOverloads constructor(
         ).apply { gravity = Gravity.CENTER })
 
         // Debug HUD overlay, top-left, above the video surface.
+        //
+        // Inset to the Android TV overscan-safe area rather than a fixed pixel margin. A TV may
+        // crop up to 5% of each edge, and the old margin was 48 *pixels* — about 2.5% on a 1080p
+        // panel, so the HUD sat inside the region a set is free to cut off, and on a TV that
+        // overscans it simply was not on screen. The documented safe margins are 48dp horizontal
+        // and 27dp vertical, which is what these resolve to.
+        //
+        // Note this is unrelated to smart fill: applyAspectFit only ever resizes surfaceView, so
+        // the crop never touched this view.
+        val safeX = (SAFE_AREA_DP_X * resources.displayMetrics.density).toInt()
+        val safeY = (SAFE_AREA_DP_Y * resources.displayMetrics.density).toInt()
         addView(debugView, LayoutParams(
             LayoutParams.WRAP_CONTENT,
             LayoutParams.WRAP_CONTENT
-        ).apply { gravity = Gravity.TOP or Gravity.START; topMargin = 48; leftMargin = 48 })
+        ).apply { gravity = Gravity.TOP or Gravity.START; topMargin = safeY; leftMargin = safeX })
 
         // Register a callback to track when the Surface is created/destroyed
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -170,5 +181,12 @@ class StreamingScreen @JvmOverloads constructor(
 
     companion object {
         private const val REFRESH_MS = 200L
+
+        /**
+         * Android TV overscan-safe margins in dp — the 5% of each edge a television is free to
+         * crop. Anything inside these is not guaranteed to be visible on a real set.
+         */
+        private const val SAFE_AREA_DP_X = 48f
+        private const val SAFE_AREA_DP_Y = 27f
     }
 }

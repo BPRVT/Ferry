@@ -239,7 +239,14 @@ class SettingsFragment : Fragment() {
             saveAndRestart { it.copy(forceScreenMirroring = enabled) }
         }
         setToggleListener(rowStartOnBoot)  { enabled -> save { it.copy(startOnBoot = enabled) } }
-        setToggleListener(rowDebugOverlay) { enabled -> save { it.copy(showDebugOverlay = enabled) } }
+        setToggleListener(rowDebugOverlay) { enabled ->
+            // Push straight to StreamStats as well as persisting, exactly as smart fill does below.
+            // Without this the flag reached StreamStats only via FerryService at receiver start, so
+            // turning the overlay on did nothing until the service was restarted — which looks
+            // precisely like the overlay being broken.
+            StreamStats.overlayEnabled = enabled
+            save { it.copy(showDebugOverlay = enabled) }
+        }
         setToggleListener(rowForceHighRes) { enabled -> save { it.copy(forceHighResolution = enabled) } }
         setToggleListener(rowSmartFill)    { enabled ->
             // Push straight to StreamStats as well as persisting: StreamingScreen reads the flag on
