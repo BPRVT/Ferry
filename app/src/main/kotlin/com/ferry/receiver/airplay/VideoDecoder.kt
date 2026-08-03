@@ -354,13 +354,27 @@ class VideoDecoder(private val outputSurface: Surface) {
         /**
          * How long [decodeNalUnit] waits for a free input buffer index before dropping the frame.
          *
-         * Much shorter than the 12 ms this needed in synchronous mode. There, the wait *was* the
-         * mechanism for getting a buffer, so it had to cover codec jitter. Here the codec pushes
-         * indices into [availableInputBuffers] as they free up, so in the common case one is already
-         * waiting and the poll returns instantly; this timeout only covers the genuine case of the
-         * decoder being saturated, where dropping promptly beats stalling the decoder thread.
+         * The codec pushes indices into [availableInputBuffers] as they free up, so in the common
+         * case one is already waiting and the poll returns instantly. This timeout only covers the
+         * case where they are all momentarily busy.
+         *
+         * Raised from 4 ms to roughly one frame interval, on measurement rather than theory. The
+         * old value came from "drop promptly rather than stall the decoder thread", which is the
+         * right rule when frames are piling up behind this one — but a full episode of real
+         * mirroring reported a queue depth of 1 out of 16 essentially the whole time, and zero
+         * queue-level drops. There is no backlog to protect, so giving up after a quarter of a
+         * frame interval bought nothing and cost 71 destroyed frames in ~76,000.
+         *
+         * Those are not cheap. A discarded frame breaks prediction for everything after it until
+         * the sender's next IDR — around ten seconds on iOS — so each one is a visible glitch. The
+         * hardware is rarely busy for *long*, it is busy for a *moment*, and 4 ms often failed to
+         * ride that out where 16 ms should.
+         *
+         * The cost is bounded and cannot bring back the 5.0.0 freeze: with one frame queued, the
+         * extra 12 ms delays nothing behind it, and waiting longer only ever makes a frame more
+         * likely to be decoded, never less.
          */
-        private const val INPUT_BUFFER_WAIT_MS = 4L
+        private const val INPUT_BUFFER_WAIT_MS = 16L
 
         /**
          * The same wait, for a frame carrying an IDR slice. Deliberately ~6 frame intervals.

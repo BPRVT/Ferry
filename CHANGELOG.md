@@ -11,6 +11,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.5.0] - 2026-08-03
+
+### Changed
+
+- **Ordinary frames now get a full frame interval to reach the decoder, not a
+  quarter of one.** `INPUT_BUFFER_WAIT_MS` goes from 4 ms to 16 ms.
+
+  When a frame is ready, Ferry hands it to the hardware decoder, which has a
+  small pool of slots to receive it. If they are all momentarily busy, Ferry
+  waits — and on expiry destroys the frame. Frames arrive about every 17 ms at
+  58 fps, so the old deadline gave up after roughly a quarter of the available
+  time.
+
+  A destroyed frame is expensive. H.264 frames are mostly deltas, so losing one
+  breaks prediction for everything after it until the sender's next IDR, about
+  ten seconds away on iOS. One dropped frame is one visible glitch lasting until
+  a keyframe rescues it.
+
+  The 4 ms came from a sound rule — drop promptly rather than stall the decoder
+  thread while frames pile up behind. What settled it was measurement rather than
+  argument: a full episode of real mirroring reported queue depth of **1 out of
+  16** essentially throughout, and **0%** queue-level drops. There is no backlog
+  to protect. The deadline was destroying frames to save time nothing else wanted
+  — 71 of them in roughly 76,000.
+
+  The hardware is rarely busy for long; it is busy for a moment. 16 ms should
+  ride out most of those moments where 4 ms did not.
+
+  This cannot bring back the freeze fixed in 5.0.1. Waiting longer only makes a
+  frame *more* likely to be decoded, and with one frame queued the extra 12 ms
+  delays nothing behind it.
+
+  Same reasoning already applied to keyframes at 100 ms in 5.0.0, which is why
+  that same episode lost **zero** keyframes. This extends it to ordinary frames
+  at a proportionate number.
+
+### Note
+
+- **How to tell whether this worked:** the debug overlay's `DEC dropped N` should
+  fall well below the 71-per-episode baseline. If it does not, the remaining
+  drops are longer stalls than 16 ms covers, and the next question is what is
+  holding the codec up rather than how long to wait for it.
+
+---
+
 ## [5.0.2] - 2026-08-03
 
 ### Fixed
