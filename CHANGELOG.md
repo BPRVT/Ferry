@@ -11,6 +11,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.0.0] - 2026-08-03
+
+### Fixed
+
+- **The picture no longer morphs for 10-15 seconds at a time.**
+
+  The symptom: mid-session, pixels smear or shift colour and stay wrong for
+  roughly 10-15 seconds before healing on their own — sometimes longer, and
+  rotating the sending device fixes it immediately.
+
+  That duration was the clue. It is not a glitch, it is a GOP. A 300-frame
+  keyframe interval at 30 fps is exactly 10 seconds. The picture was staying
+  broken until the sender's next IDR, which is what you would expect if a
+  reference frame went missing and the decoder kept decoding frames that predict
+  from it. Ferry cannot ask for a keyframe — the mirroring path it implements has
+  no back-channel for that — so it had to wait for the encoder's own.
+
+  Three separate faults, all of which had to be fixed for it to stop:
+
+  **Frames were being dropped in a second place nobody was watching.**
+  `MirrorStreamServer.enqueue` has a careful drop policy: when it sheds a frame
+  that later frames reference, it arms a keyframe resync so the decoder stops
+  being fed predicted frames it cannot resolve. But `VideoDecoder.decodeNalUnit`
+  drops frames too, when no MediaCodec input buffer comes free in time, and it
+  did so silently — a verbose log line and nothing else. That drop never reached
+  the resync logic, so the stream went reference-broken with nothing recording
+  it. `decodeNalUnit` now reports whether the codec accepted the frame, and a
+  dropped frame that anything predicts from arms the resync like any other.
+
+  **The resync flag was cleared before the keyframe was actually decoded.**
+  The old order was: see that we are resyncing, clear the flag, then hand the
+  frame to the codec. If the codec then dropped that very IDR, the resync was
+  recorded as finished while no keyframe had reached the decoder — and since the
+  flag was already clear, nothing re-armed it. Every predicted frame afterwards
+  decoded against nothing. The flag is now cleared only once the codec has taken
+  the frame.
+
+  **A keyframe was given the same 4 ms to find an input buffer as any other
+  frame.** Those two cases are not comparable. Losing a predicted frame costs one
+  frame; losing an IDR costs every frame until the next one, a whole GOP later.
+  Keyframes now wait up to 100 ms — about six frame intervals, into a queue that
+  holds sixteen and sheds non-reference frames first. Tens of milliseconds
+  against tens of seconds.
+
+  There is also a concurrency consequence of that wait. The decoder thread can
+  now block inside a single decode call while the reader thread keeps running, so
+  the reader can arm a *fresh* resync for a gap that lands after the in-flight
+  keyframe. Clearing the flag on that keyframe's success would have silently
+  reintroduced the same corruption. A sequence counter makes the clear conditional
+  on the resync being the one that just completed.
+
+### Added
+
+- **Decoder-level drops are now counted and visible** in the debug overlay and
+  the periodic log — `DEC dropped N keyframes lost N`, separate from the queue's
+  existing drop percentage. They previously existed only as a verbose log line,
+  which is why this took a while to find: during an episode the queue drop rate
+  stays flat, because the frames were being lost somewhere it was not counting.
+
+### Note
+
+- **Repeated SPS/PPS is logged but deliberately does not arm a resync.** Rotating
+  the sender fixes a stuck picture because it changes the frame dimensions, so
+  the parameter sets differ and the decoder is rebuilt; when they are identical
+  the config is currently ignored. Treating any repeated config as a resync point
+  would automate that recovery **if** this sender pairs parameter sets with IDRs,
+  and would freeze a healthy stream for up to a full GOP if it does not. Which
+  one iOS actually does cannot be determined from this side, so 5.0.0 logs the
+  occurrences instead of guessing. The log settles it.
+
+---
+
 ## [4.5.0] - 2026-08-03
 
 ### Security

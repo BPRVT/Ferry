@@ -21,9 +21,25 @@ class VideoDecoder(outputSurface: Any?) {
     var isHealthy = true
 
     fun initialize(sps: ByteArray, pps: ByteArray, width: Int, height: Int) {}
-    // Signature must track the real VideoDecoder: MirrorStreamServer passes an explicit length
-    // because the AVCC→Annex-B conversion is done in place and the buffer may have a tail.
-    fun decodeNalUnit(nalUnit: ByteArray, presentationTimeUs: Long = 0L, length: Int = nalUnit.size) {}
+
+    /**
+     * Signature must track the real VideoDecoder.
+     *
+     * [length] is explicit because the AVCC→Annex-B conversion is done in place and the buffer may
+     * have a tail. [keyframe] lets the real decoder wait materially longer for an input buffer,
+     * since dropping an IDR costs a whole GOP of corrupt picture rather than a single frame.
+     *
+     * Returns whether the codec accepted the frame; MirrorStreamServer arms a keyframe resync when
+     * it did not. The stub always accepts — no JVM test exercises the hardware-decode path, and
+     * "accepted" is the non-eventful answer.
+     */
+    fun decodeNalUnit(
+        nalUnit: ByteArray,
+        presentationTimeUs: Long = 0L,
+        length: Int = nalUnit.size,
+        keyframe: Boolean = false,
+    ): Boolean = true
+
     fun release() {}
 
     companion object {

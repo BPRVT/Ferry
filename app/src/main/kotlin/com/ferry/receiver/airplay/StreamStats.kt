@@ -41,7 +41,20 @@ object StreamStats {
     @Volatile var videoRes = ""        // e.g. "1920x1080"
     @Volatile var videoFps = 0         // frames/sec over the last sample window
     @Volatile var videoQueue = 0       // current decode-queue depth
-    @Volatile var videoDropPct = 0     // cumulative % of frames dropped under load
+    @Volatile var videoDropPct = 0     // cumulative % of frames dropped at the queue, under load
+
+    /**
+     * Frames dropped *inside* the decoder because no MediaCodec input buffer came free in time —
+     * a different failure from [videoDropPct], which counts frames shed at the queue.
+     *
+     * Split out because the two look identical on screen but have different causes, and this one
+     * used to be invisible: it was logged at verbose and counted nowhere. If the picture corrupts
+     * while queue drop% stays flat, this is the counter that moves.
+     */
+    @Volatile var videoDecoderDrops = 0
+
+    /** Of those, the expensive ones: a dropped IDR costs a full GOP of corrupt picture. */
+    @Volatile var videoKeyframeDrops = 0
 
     // Actual decoded video dimensions (from the SPS, so portrait phone streams are portrait here).
     // StreamingScreen reads these to aspect-fit the Surface instead of stretching to 16:9.
@@ -56,6 +69,7 @@ object StreamStats {
     /** Clears per-stream counters (call when a mirror session ends). Keeps [overlayEnabled]. */
     fun resetStreams() {
         videoRes = ""; videoFps = 0; videoQueue = 0; videoDropPct = 0
+        videoDecoderDrops = 0; videoKeyframeDrops = 0
         videoWidth = 0; videoHeight = 0
         audioActive = false; audioQueue = 0; audioDupPct = 0
     }
@@ -64,5 +78,6 @@ object StreamStats {
     fun summary(): String =
         "Ferry · debug\n" +
         "VIDEO  ${videoRes.ifEmpty { "—" }}   ${videoFps} fps   q ${videoQueue}   drop ${videoDropPct}%\n" +
+        "DEC    dropped ${videoDecoderDrops}   keyframes lost ${videoKeyframeDrops}\n" +
         "AUDIO  " + (if (audioActive) "on   q ${audioQueue}   dup ${audioDupPct}%" else "off")
 }

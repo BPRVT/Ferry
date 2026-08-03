@@ -82,10 +82,32 @@ class MirrorStreamServer(
     // the two have wildly different user impact: a disposable drop is invisible, one of these
     // freezes the picture until iOS next sends an IDR.
     private var keyframeWaits = 0
+    // Frames lost at the *decoder* (no free MediaCodec input buffer), as opposed to at the queue.
+    // Counted separately because they have a different cause and used to be counted nowhere at all.
+    private var decoderDrops = 0
+    private var keyframeDrops = 0
+    // Type-1 config packets whose SPS/PPS matched the running decoder. Counted only to find out
+    // whether this sender pairs parameter sets with IDRs — see configureDecoder.
+    private var repeatedConfigs = 0
     private var lastStatMs = 0L
     // Set by the reader thread when a frame is dropped under load; the decoder thread then skips
     // frames until the next keyframe (IDR) so it never decodes a reference-broken, corrupt stream.
     @Volatile private var awaitingKeyframe = false
+
+    /**
+     * Bumped by the reader thread every time it arms [awaitingKeyframe] after shedding a frame that
+     * later frames reference.
+     *
+     * Exists because the decoder thread may now block for up to a keyframe's input-buffer wait
+     * (100 ms, see `VideoDecoder.KEYFRAME_INPUT_BUFFER_WAIT_MS`) inside a single `decodeNalUnit`,
+     * and the reader
+     * keeps running during that window. Without this, the sequence "we were resyncing → an IDR is
+     * accepted → clear the flag" could clear an arming the reader raised *while the IDR was in
+     * flight*, for a gap that lands after that IDR in stream order — silently reintroducing exactly
+     * the corruption this change removes. Comparing the count across the decode call means the flag
+     * is only cleared when the resync it belongs to is genuinely the one that just completed.
+     */
+    @Volatile private var resyncArmSeq = 0
 
     /** The OS-assigned TCP port macOS should connect to (returned in the SETUP response). */
     val dataPort: Int get() = serverSocket.localPort
@@ -198,6 +220,7 @@ class MirrorStreamServer(
                 queue.poll()                       // 3: nothing disposable — lose a reference
                 framesDropped++
                 awaitingKeyframe = true            // reference-broken — resync at the next IDR
+                resyncArmSeq++                     // tell the decoder thread this arming is new
                 keyframeWaits++
             }
             queue.offer(item)
@@ -208,8 +231,12 @@ class MirrorStreamServer(
             if (lastStatMs != 0L) StreamStats.videoFps = (300_000L / (now - lastStatMs).coerceAtLeast(1)).toInt()
             lastStatMs = now
             StreamStats.videoDropPct = framesDropped * 100 / framesIn
+            // decoderDrops/keyframeDrops are written on the decoder thread, so read them back
+            // through StreamStats' volatile fields rather than the plain ints behind them.
             Logger.i("Video stats: in=$framesIn dropped=$framesDropped " +
                 "(${StreamStats.videoDropPct}%) keyframeWaits=$keyframeWaits " +
+                "decoderDrops=${StreamStats.videoDecoderDrops} " +
+                "keyframeDrops=${StreamStats.videoKeyframeDrops} " +
                 "queue=${queue.size}/$QUEUE_CAPACITY ${StreamStats.videoFps}fps")
         }
     }
@@ -255,7 +282,23 @@ class MirrorStreamServer(
         val d = decoder
         val surface = awaitSurface()
         if (d != null && d.isHealthy && sps.contentEquals(lastSps) && pps.contentEquals(lastPps) &&
-            surface === configuredSurface) return
+            surface === configuredSurface) {
+            // Same parameter sets as the running decoder — nothing to rebuild.
+            //
+            // It is tempting to also arm a keyframe resync here, on the theory that an encoder
+            // resends SPS/PPS immediately ahead of an IDR so a receiver that lost sync can rejoin.
+            // If that holds, arming is free: the IDR is the very next frame. If it does not — if
+            // this sender emits parameter sets on some timer unrelated to IDRs — arming would stop
+            // feeding the decoder on a *healthy* stream and freeze the picture until the next IDR,
+            // up to a full GOP away. That is a far worse failure than the one being fixed, and
+            // which behaviour iOS actually has is not something this code can find out.
+            //
+            // So: log the pattern, change nothing. If these turn out to arrive paired with IDRs,
+            // arming here is a safe follow-up; the log is what settles it.
+            repeatedConfigs++
+            Logger.i("Mirror: repeated SPS/PPS, no change (count=$repeatedConfigs) — no rebuild")
+            return
+        }
         lastSps = sps
         lastPps = pps
         rebuildDecoder(surface)
@@ -297,16 +340,47 @@ class MirrorStreamServer(
             d.release(); decoder = null; configuredSurface = null; lastSps = null; lastPps = null
             return
         }
-        if (awaitingKeyframe) {
-            // After a dropped frame the stream is reference-broken; skip until the next IDR so we
-            // don't feed the decoder predicted frames with missing references (which smear/blocky).
-            if (!frame.keyframe) return
-            awaitingKeyframe = false
-            Logger.i("Mirror: resynced on keyframe after a dropped frame")
+        // After a reference frame goes missing the stream is reference-broken; skip until the next
+        // IDR so we don't feed the decoder predicted frames whose references it never received
+        // (which is what smears and morphs the picture).
+        val resyncing = awaitingKeyframe
+        if (resyncing && !frame.keyframe) return
+        // Sampled before the decode call, which can now block: see [resyncArmSeq].
+        val armSeqBefore = resyncArmSeq
+
+        // The flag is cleared only AFTER the codec actually accepts the frame, never before.
+        // Clearing it up front — which is what this did — meant that if the decoder then dropped
+        // this very IDR, the resync was recorded as done while no keyframe had reached the codec.
+        // Every predicted frame after it decoded against nothing, and because the flag was already
+        // clear, nothing re-armed the resync. That is the corruption that lasted until the *next*
+        // IDR, a full GOP later, and it is the bug this ordering fixes.
+        val accepted = d.decodeNalUnit(annexB, framePtsUs, length, keyframe = frame.keyframe)
+
+        if (accepted) {
+            if (framePtsUs == 0L) Logger.i("Mirror: first video frame fed to decoder (${length}B)")
+            // Only clear if the reader did not arm a *fresh* resync while this frame was in flight.
+            // If it did, that gap is later in stream order than this IDR, so we still need another.
+            if (resyncing && resyncArmSeq == armSeqBefore) {
+                awaitingKeyframe = false
+                Logger.i("Mirror: resynced on keyframe after a dropped frame")
+            }
+            framePtsUs += FRAME_INTERVAL_US
+            return
         }
-        if (framePtsUs == 0L) Logger.i("Mirror: first video frame fed to decoder (${length}B)")
-        d.decodeNalUnit(annexB, framePtsUs, length)
-        framePtsUs += FRAME_INTERVAL_US
+
+        // Dropped inside the decoder — no free input buffer in time. This is a second, independent
+        // drop point from the one in [enqueue], and it used to be invisible to the resync logic
+        // entirely: the queue's careful "did we break a reference?" bookkeeping simply did not
+        // cover frames lost down here.
+        decoderDrops++
+        StreamStats.videoDecoderDrops = decoderDrops
+        if (frame.keyframe) {
+            keyframeDrops++
+            StreamStats.videoKeyframeDrops = keyframeDrops
+        }
+        // Only a frame nothing predicts from is safe to lose silently. Anything else — including an
+        // IDR, which is always a reference — leaves the stream broken until a keyframe lands.
+        if (!frame.disposable) awaitingKeyframe = true
     }
 
     /**

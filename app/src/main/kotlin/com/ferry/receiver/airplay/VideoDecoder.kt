@@ -225,18 +225,37 @@ class VideoDecoder(private val outputSurface: Surface) {
      *
      * @param nalUnit The raw NAL unit bytes (without the RTP header).
      * @param presentationTimeUs Presentation timestamp in microseconds (for A/V sync).
+     * @param length valid bytes in [nalUnit]; may be shorter than the array.
+     * @param keyframe true when this access unit carries an IDR slice. An IDR is the only frame
+     *   that ends a corruption episode, so it is worth waiting materially longer for a free input
+     *   buffer — see [KEYFRAME_INPUT_BUFFER_WAIT_MS].
+     * @return true if the frame was handed to the codec, false if it was dropped. The caller needs
+     *   this: dropping a frame that later frames predict from leaves the stream reference-broken,
+     *   and only the caller knows whether that was the case.
      */
-    fun decodeNalUnit(nalUnit: ByteArray, presentationTimeUs: Long, length: Int = nalUnit.size) {
+    fun decodeNalUnit(
+        nalUnit: ByteArray,
+        presentationTimeUs: Long,
+        length: Int = nalUnit.size,
+        keyframe: Boolean = false,
+    ): Boolean {
         val codec = mediaCodec ?: run {
             Logger.w("decodeNalUnit() called but decoder not initialized")
-            return
+            return false
         }
 
         try {
             // Take an input buffer the codec has ALREADY handed us. The brief poll rides out normal
             // codec jitter; unlike the old dequeueInputBuffer() wait it costs nothing in the common
             // case, because a free index is almost always sitting in the queue.
-            val inputBufferIndex = availableInputBuffers.poll(INPUT_BUFFER_WAIT_MS, TimeUnit.MILLISECONDS)
+            //
+            // A keyframe waits far longer, because the two outcomes are not remotely symmetric.
+            // Dropping a predicted frame costs one frame. Dropping an IDR costs every frame until
+            // the sender's *next* IDR, which on an iOS mirroring encoder is a whole GOP away —
+            // 10-15 seconds of visibly corrupt picture, longer if the screen is static and the
+            // encoder defers keyframes. Tens of milliseconds against tens of seconds.
+            val wait = if (keyframe) KEYFRAME_INPUT_BUFFER_WAIT_MS else INPUT_BUFFER_WAIT_MS
+            val inputBufferIndex = availableInputBuffers.poll(wait, TimeUnit.MILLISECONDS)
 
             if (inputBufferIndex != null) {
                 // We got an input buffer — fill it with the NAL unit bytes
@@ -256,18 +275,29 @@ class VideoDecoder(private val outputSurface: Surface) {
                     presentationTimeUs,
                     0                  // flags: 0 = normal frame (not end-of-stream)
                 )
+                return true
             } else {
                 // No input buffer available — the decoder is catching up.
                 // Drop this NAL unit to avoid building up backlog (prefer low latency).
-                Logger.v { "VideoDecoder: no input buffer available, dropping NAL unit" }
+                if (keyframe) {
+                    // Loud, because this is the expensive one: the picture is now corrupt until the
+                    // sender's next IDR, and there is no way to ask it for one.
+                    Logger.w("VideoDecoder: dropped a KEYFRAME after ${KEYFRAME_INPUT_BUFFER_WAIT_MS}ms " +
+                             "— picture will stay broken until the sender's next IDR")
+                } else {
+                    Logger.v { "VideoDecoder: no input buffer available, dropping NAL unit" }
+                }
+                return false
             }
 
         } catch (e: IllegalStateException) {
             // MediaCodec is now in the error state and cannot recover — flag for recreation.
             Logger.e("VideoDecoder entered error state — will recreate", e)
             isHealthy = false
+            return false
         } catch (e: Exception) {
             Logger.e("Error decoding NAL unit", e)
+            return false
         }
     }
 
@@ -331,6 +361,23 @@ class VideoDecoder(private val outputSurface: Surface) {
          * decoder being saturated, where dropping promptly beats stalling the decoder thread.
          */
         private const val INPUT_BUFFER_WAIT_MS = 4L
+
+        /**
+         * The same wait, for a frame carrying an IDR slice. Deliberately ~6 frame intervals.
+         *
+         * The reasoning behind [INPUT_BUFFER_WAIT_MS] — "dropping promptly beats stalling the
+         * decoder thread" — is right for a predicted frame and wrong for a keyframe, because the
+         * costs differ by three orders of magnitude. Dropping a predicted frame costs one frame.
+         * Dropping an IDR costs every frame until the sender sends another, and Ferry cannot ask
+         * for one: the AirPlay mirroring path it implements has no keyframe-request back-channel.
+         * On iOS that is a full GOP — measured at 10-15 seconds, and longer on a static screen
+         * where the encoder defers keyframes because little is changing.
+         *
+         * 100 ms is affordable. At 60 fps it admits ~6 frames into a queue that holds 16, and
+         * MirrorStreamServer.enqueue sheds non-reference frames first if that fills. So the worst
+         * case is a few invisible frames dropped to save a 10-second corruption episode.
+         */
+        private const val KEYFRAME_INPUT_BUFFER_WAIT_MS = 100L
 
         /**
          * Parses the H.264 SPS NAL unit to extract the actual video resolution.

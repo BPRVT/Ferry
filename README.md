@@ -92,7 +92,7 @@ Network**.
 
 ```bash
 adb connect 192.168.1.42:5555
-adb install -r ferry-v4.5.0-firetv.apk
+adb install -r ferry-v5.0.0-firetv.apk
 ```
 
 Accept the authorization prompt on the TV the first time. Then launch **Ferry** from the
