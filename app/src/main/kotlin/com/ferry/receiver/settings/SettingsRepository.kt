@@ -110,7 +110,10 @@ class SettingsRepository(private val context: Context) {
         airPlayEnabled     = this[Keys.AIRPLAY_ENABLED]         ?: true,
         miracastEnabled    = this[Keys.MIRACAST_ENABLED]        ?: true,
         castEnabled        = this[Keys.CAST_ENABLED]            ?: true,
-        airPlayPinAuthEnabled = this[Keys.AIRPLAY_PIN_AUTH]     ?: true,
+        // Fallback must track AppSettings.airPlayPinAuthEnabled's default. Note this only affects
+        // installs that have never written a setting: any prior call to update() persists every
+        // key, so an existing user's stored choice wins over a change to this default.
+        airPlayPinAuthEnabled = this[Keys.AIRPLAY_PIN_AUTH]     ?: false,
         forceScreenMirroring = this[Keys.FORCE_SCREEN_MIRRORING] ?: false,
         startOnBoot        = this[Keys.START_ON_BOOT]           ?: false,
         showDebugOverlay   = this[Keys.SHOW_DEBUG_OVERLAY]      ?: false,

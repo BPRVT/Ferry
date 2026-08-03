@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Ferry network security configuration.
+
+    WHY THIS EXISTS: at targetSdk 28+ Android blocks cleartext HTTP by default. Ferry had no
+    declaration at all, so it inherited that block — and two features quietly depended on cleartext:
+
+      * DACP reverse control (DacpClient) — an HTTP GET to the *sender's* own LAN address, which is
+        how the TV remote pauses or skips what your iPhone is playing. Its failure path is
+        runCatching { }.onFailure { Logger.e(...) }, so a blocked request logs and nothing else.
+      * AirPlay video URL mode (AirPlayVideoPlayer) — the sender hands over a media URL for the TV
+        to fetch, and those URLs are routinely http:// on the local network.
+
+    WHY PERMITTING IT COSTS NOTHING REAL HERE: this setting governs the platform HTTP stack
+    (HttpURLConnection, MediaPlayer, WebView). It does not govern raw sockets, which is what every
+    AirPlay protocol port already uses — RTSP on 7000, mirror video on 7100, audio on 6001. Those
+    are cleartext by protocol design and were never affected by this flag. So the block was not
+    protecting the bulk of Ferry's traffic; it was only breaking the two features above.
+
+    There is also nothing else to protect: Ferry has no hardcoded remote endpoint anywhere (see
+    AUDIT.md), needs no internet connection, and the only host it ever contacts is the sender that
+    connected to it, resolved via mDNS on the local network.
+
+    Android's config format matches on hostnames, not address ranges, so "RFC1918 only" cannot be
+    expressed here — the sender's address is whatever DHCP handed it. Hence a base-config.
+-->
+<!--
+    InsecureBaseConfiguration is suppressed here and NOT in the project's lint disable list, so the
+    check stays live for anything else that might turn cleartext on later. This one instance is the
+    considered exception documented above.
+-->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config
+        cleartextTrafficPermitted="true"
+        tools:ignore="InsecureBaseConfiguration">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

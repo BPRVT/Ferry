@@ -20,7 +20,8 @@
     - READ/WRITE storage (we don't persist stream data)
     - CAMERA            (not needed)
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Network permissions — local LAN only, no internet required -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -32,11 +33,37 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
-    <!-- Miracast (Wi-Fi Direct / Wi-Fi P2P) -->
+    <!--
+        Miracast (Wi-Fi Direct / Wi-Fi P2P).
+
+        The location permissions are capped at API 32. Android 13 introduced NEARBY_WIFI_DEVICES
+        precisely so an app that scans for nearby devices no longer has to hold a location
+        permission it does not want; on 33+ that permission alone covers Wi-Fi P2P discovery.
+        Without the cap, Ferry keeps asking for fine location on every modern device and the user
+        has to take on trust that it is unused. maxSdkVersion turns that into something the manifest
+        states outright.
+
+        neverForLocation is the matching assertion for NEARBY_WIFI_DEVICES: Ferry does not derive
+        location from Wi-Fi scan results. There is no LocationManager, no location provider, and no
+        geocoding anywhere in the tree (see AUDIT.md).
+    -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+    <uses-permission
+        android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+    <!--
+        UnusedAttribute: usesPermissionFlags is API 31+, and minSdk here is 25. That is the point —
+        older platforms ignore it, and the permission it qualifies does not exist before API 33
+        anyway. Suppressed rather than dropped, because dropping it would mean asserting nothing
+        about location on exactly the platforms where the assertion is meaningful.
+    -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:ignore="UnusedAttribute" />
 
     <!-- Start on boot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -69,6 +96,7 @@
     <application
         android:name=".FerryApp"
         android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:banner="@drawable/app_banner"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

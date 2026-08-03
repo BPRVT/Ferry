@@ -11,6 +11,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.5.0] - 2026-08-03
+
+### Security
+
+- **The pairing PIN is now OFF by default.** Ferry ships open: any device that can
+  reach the subnet can mirror to the TV without anyone touching it, and the only
+  access control in that configuration is the network perimeter. 2.0.5 through
+  4.0.0 defaulted it on; this reverses that.
+
+  The trade being made is friction against exposure. Ferry is an appliance driven
+  by a remote control, and a PIN on every connection is real cost on a network the
+  owner already trusts. That is the common case and it now gets the default. It is
+  the wrong default for a TV on guest, shared, or open Wi-Fi, and `SECURITY.md`
+  and the README both say so rather than leaving it implied — the settings row
+  says it too, so it is visible at the point of decision.
+
+  **Upgrading does not silently disable a PIN you already set.** Settings persist
+  as a whole record, so any user who has ever changed a setting has their choice
+  stored and it wins. The new default reaches fresh installs and people who never
+  opened Settings.
+
+- **Cleartext HTTP is now declared instead of accidentally blocked.** At
+  targetSdk 28+ Android blocks cleartext by default, and Ferry had no declaration
+  at all — so it inherited the block, and two features that need it were failing
+  silently: DACP reverse control (`runCatching { }.onFailure { Logger.e(...) }`,
+  so a blocked request logged and did nothing) and AirPlay video URL playback,
+  whose URLs are routinely `http://` on the LAN.
+
+  This flag only ever governed the platform HTTP stack. Every AirPlay protocol
+  port — RTSP 7000, mirror video 7100, audio 6001 — is a raw socket and was never
+  affected, so the block was not protecting the bulk of the traffic; it was only
+  breaking those two paths. Ferry has no hardcoded remote endpoint and contacts
+  only the sender that connected to it. Now stated explicitly, with the reasoning,
+  in `network_security_config.xml`.
+
+- **Location permissions capped at API 32.** `ACCESS_FINE_LOCATION` and
+  `ACCESS_COARSE_LOCATION` now carry `maxSdkVersion="32"`, and
+  `NEARBY_WIFI_DEVICES` carries `neverForLocation`. Android 13 added the nearby-devices
+  permission precisely so an app scanning for Wi-Fi Direct peers stops having to hold a
+  location permission it does not use. Ferry never used it — there is no
+  `LocationManager` anywhere in the tree — but on any modern device it was still asking,
+  and the user had to take that on trust. The manifest now says it outright.
+
+- **Config-frame parsing is bounded by the frame, not the buffer.** With the reader
+  buffer now reused (below), an SPS/PPS length field that overruns the frame can still
+  land inside the array — in bounds, no exception, decoder configured from whatever the
+  previous frame left there. Every offset is now checked against the payload's real
+  length, with tests for both the overrun and the reused-buffer case.
+
+### Changed
+
+- **The release APK is 53.9% smaller** — 11.6 MB → 5.6 MB.
+
+  Two causes, both inherited. `keepDebugSymbols += "**/*.so"` in the packaging
+  block applied to every variant, not just debug, so release APKs shipped full
+  DWARF debug info: 81% of `libalac.so` was `.debug_*` sections, for a decoder
+  whose actual `.text` is 138 KB. And the Fire TV build carried x86 and x86_64
+  copies of both native libraries, which no Fire TV can execute — every Stick,
+  Cube, and Omni panel Amazon has shipped is ARM. ABI sets are now per flavor;
+  googletv keeps x86 for Intel boxes, ChromeOS, and emulators.
+
+  This matters more than a download size: it installs onto a stick that typically
+  has very little free storage.
+
+- **The mirror reader reuses its payload buffer.** Each video frame allocated a
+  fresh `ByteArray` to read into and a second one for the decrypted output. The
+  read buffer is consumed synchronously — `cipher.update()` returns its own array,
+  and config frames are copied out — so nothing retains it and it can be reused.
+  Halves the large short-lived allocations on the 60 fps path, on a device with
+  very little GC headroom. It grows on demand and stops retaining past 2 MB, so an
+  outsized frame can't pin memory for the session.
+
+### Fixed
+
+- **The README described a project that no longer existed.** It still claimed
+  "everything else is upstream's, deliberately left alone" and listed the feature
+  set as "inherited from upstream, unchanged" — written at import, when both were
+  true. Since then Ferry has changed ~2,000 lines across 42 files, 13 of them new,
+  including most of the video pipeline. Rewritten against what the code now does,
+  with a settings table that previously did not exist and an install command that
+  named an APK the release workflow does not produce.
+
+  The provenance section stays, shortened but not softened. It is a GPL
+  obligation and it is true; `NOTICE` remains the authority.
+
+---
+
 ## [4.0.0] - 2026-08-03
 
 ### Added

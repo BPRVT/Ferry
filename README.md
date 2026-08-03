@@ -21,32 +21,39 @@ A ferry carries something across to the other side. That's the job.
 
 ---
 
-## This is a derivative work — read this first
+## Provenance
 
-**Ferry is derived from [mazer666/PhairPlay](https://github.com/mazer666/PhairPlay).**
-It is a standalone repository rather than a GitHub fork, but it is not an original
-implementation and does not pretend to be. The AirPlay protocol stack — RTSP handling,
-the AirPlay 2 handshake, mDNS advertisement, the MediaCodec pipeline — is PhairPlay's
-work. PhairPlay's own AirPlay implementation traces back through
-[UxPlay](https://github.com/FDH2/UxPlay) to [RPiPlay](https://github.com/FD-/RPiPlay),
-the FairPlay code originates in
-[EstebanKubata/playfair](https://github.com/EstebanKubata/playfair), and the protocol is
-documented by [openairplay/airplay-spec](https://github.com/openairplay/airplay-spec).
-The ALAC decoder is Apple's own open-source code.
+**Ferry is a derivative work, and the AirPlay protocol stack is not original to it.** It
+began as [mazer666/PhairPlay](https://github.com/mazer666/PhairPlay) — RTSP handling, the
+AirPlay 2 handshake, mDNS advertisement, the MediaCodec pipeline. That lineage runs back
+through [UxPlay](https://github.com/FDH2/UxPlay) to
+[RPiPlay](https://github.com/FD-/RPiPlay); the FairPlay code originates in
+[EstebanKubata/playfair](https://github.com/EstebanKubata/playfair); the ALAC decoder is
+Apple's own open-source code; and the protocol is documented by
+[openairplay/airplay-spec](https://github.com/openairplay/airplay-spec).
 
-The full chain, with every attribution obligation spelled out, is in [`NOTICE`](NOTICE).
+Every attribution obligation is spelled out in [`NOTICE`](NOTICE). None of it is optional
+— GPLv3 requires it, and it stays regardless of how far the project diverges.
 
-### What Ferry changes
+### What Ferry has changed since
 
-| Change | Detail |
+Roughly 2,000 lines across 42 files, 13 of them new, on top of that baseline. The parts
+worth naming:
+
+| Area | Change |
 |---|---|
-| **Screensaver fix** | The Fire TV screensaver no longer interrupts an active mirroring session. This is why the project exists. [Details below.](#the-screensaver-fix) |
-| **Licensing corrected** | GPLv3 instead of Apache 2.0, to match the actual provenance of the native code. Missing license headers added to `cpp/playfair/`. [Details below.](#licensing--gplv3-and-why-it-changed) |
-| **Security audit** | The whole baseline was audited before anything was changed. [`AUDIT.md`](AUDIT.md) |
-| **Rebrand** | New name, package `com.ferry.receiver`, icon, banner, advertised device name. |
-| **Release provenance** | Tagged releases build the APK from source in CI — upstream had no release workflow. |
+| **Screensaver** | The Fire TV screensaver no longer interrupts an active session. This is why the project exists. [Details below.](#the-screensaver-fix) |
+| **Video pipeline** | Asynchronous MediaCodec decode, realtime codec priority, low-latency mode, a shallow bounded frame queue that sheds non-reference frames first, in-place AVCC→Annex-B conversion, and a reused read buffer. Latency and GC pressure, both reduced deliberately. |
+| **Picture** | Smart fill (crop a capped slice instead of showing black bars), optional 1440p advertisement for sharper text. |
+| **Audio** | Correct dB→amplitude volume mapping, volume on the legacy RAOP path, and an optional compressing loudness boost for quiet sources. |
+| **AirPlay modes** | "Always mirror the screen" — withholds the video-URL capability bit so senders stop popping out into their own player. |
+| **Security** | Hardened LAN-facing parsers (RTSP reader stack overflow, unbounded FU-A reassembly, config-frame bounds), SRP PIN pairing with a persistent lockout, scoped-down location permissions. |
+| **Packaging** | Release APK cut by more than half — native libraries are now stripped, and the Fire TV build ships ARM only. |
+| **Licensing** | GPLv3 instead of Apache 2.0, to match the provenance of the native code. Missing headers added to `cpp/playfair/`. [Details below.](#licensing--gplv3-and-why-it-changed) |
+| **Provenance** | The baseline was audited before anything was changed ([`AUDIT.md`](AUDIT.md)), and tagged releases now build from source in CI — upstream had no release workflow. |
 
-Everything else is upstream's, deliberately left alone.
+Full history in [`CHANGELOG.md`](CHANGELOG.md). Miracast and Google Cast remain as
+upstream left them: control plane implemented, media path not.
 
 ### Licensing — GPLv3, and why it changed
 
@@ -85,7 +92,7 @@ Network**.
 
 ```bash
 adb connect 192.168.1.42:5555
-adb install -r app-firetv-release.apk
+adb install -r ferry-v4.5.0-firetv.apk
 ```
 
 Accept the authorization prompt on the TV the first time. Then launch **Ferry** from the
@@ -200,7 +207,14 @@ leaving the TV awake permanently — the exact failure mode being avoided.
 
 Ferry is a **LAN-only receiver**: it opens listening sockets and parses binary protocol
 data from whatever connects to them. **Run it on a home network you control**, not on
-shared or open Wi-Fi. Enable **Settings → Require pairing PIN** for access control.
+shared or open Wi-Fi.
+
+> **The pairing PIN is off by default.** Out of the box, any device that can reach the
+> subnet can mirror to the TV without anyone touching it — the only access control is your
+> network perimeter. That is a deliberate trade for an appliance driven by a remote
+> control on a network its owner already trusts. **If the TV shares a network with guests,
+> or sits on shared or open Wi-Fi, turn on Settings → Require pairing PIN.** Upgrading
+> won't silently disable a PIN you already set; see [`SECURITY.md`](SECURITY.md).
 
 Full threat model and reporting process in [`SECURITY.md`](SECURITY.md).
 
@@ -247,16 +261,31 @@ observation rather than by trusting a source review.
 
 ## Features
 
-Inherited from upstream, unchanged:
-
 - **AirPlay 2 screen mirroring** from macOS 12+ and iOS/iPadOS 16+ — H.264 hardware
-  decode via `MediaCodec`.
+  decode via `MediaCodec`, decoded asynchronously and rendered as soon as each frame is
+  ready.
 - **Audio** — AAC-ELD / AAC-LC / ALAC, with NTP-based A/V sync.
-- **HomeKit-style pairing**, with an optional on-screen PIN.
-- **Photos** via AirPlay, and **video URL mode** (`POST /play`).
+- **HomeKit-style pairing**, with an optional on-screen PIN (off by default — see
+  [Security](#security)).
+- **Photos** via AirPlay, and **video URL mode** (`POST /play`), which can be turned off
+  so senders always mirror instead.
 - **DACP reverse remote** — the TV remote can play/pause/skip what the sender is playing.
-- Miracast and Google Cast receivers are partially implemented upstream (control plane
-  done, media pending). Ferry has not worked on these.
+- Miracast and Google Cast: control plane implemented, media path not. Inherited in that
+  state and not worked on since.
+
+### Settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| Device name | `Ferry` | The name shown in the sender's AirPlay picker. |
+| Require pairing PIN | **Off** | Show a code on the TV that must be entered to connect. Off means anyone on the network can mirror. |
+| Always mirror the screen | Off | Stops apps opening their own player on the TV. |
+| Higher resolution (1440p) | Off | Sharper text, more decode work. |
+| Smart fill | On | Fill the screen by cropping a capped slice rather than showing black bars. |
+| Mirroring audio | On | Accept the audio stream that accompanies a mirror session. |
+| Audio boost | Off | Up to +12 dB of compressing gain for quiet sources. |
+| Start on boot | Off | Launch the receiver when the TV starts. |
+| Debug overlay | Off | On-screen HUD: fps, queue depth, drop rate, resolution. |
 
 ---
 
@@ -267,8 +296,11 @@ Inherited from upstream, unchanged:
 - [`AUDIT.md`](AUDIT.md) — the full security audit.
 - [`SECURITY.md`](SECURITY.md) — threat model and vulnerability reporting.
 - [`NOTICE`](NOTICE) — provenance and licensing.
-- [`PROGRESS.md`](PROGRESS.md) — build log for the fork.
-- [`docs/`](docs/) — upstream's specs and guides, kept for reference.
+- [`CHANGELOG.md`](CHANGELOG.md) — every release, and why each change was made.
+- [`PROGRESS.md`](PROGRESS.md) — build log.
+- [`docs/spec/TECHNICAL_SPEC.md`](docs/spec/TECHNICAL_SPEC.md) — protocol reference. §8
+  (the `features` bitmask) has been rebuilt against the two public AirPlay references; the
+  rest is inherited and has not been re-verified to that standard.
 
 ## License
 

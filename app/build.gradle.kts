@@ -28,18 +28,14 @@ android {
         // applicationId is overridden per flavor below
         minSdk = 25           // Lowest common denominator (Fire TV)
         targetSdk = 35
-        versionCode = 13
-        versionName = "4.0.0"
+        versionCode = 14
+        versionName = "4.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "CAST_APP_ID", "\"${castAppId.escapedForBuildConfig()}\"")
 
-        // Native FairPlay (libplayfair.so) — build for all Android ABIs so Ferry runs on
-        // the full range of Android TV / Fire TV hardware (32- and 64-bit ARM, plus x86/x86_64
-        // for Intel devices, ChromeOS, and emulators). Required for Google Play 64-bit compliance.
-        ndk {
-            abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-        }
+        // ABIs are set per flavor below rather than here — the two targets do not need the same
+        // set, and every extra ABI is a full second copy of libalac.so + libplayfair.so in the APK.
     }
 
     // Native build: RPiPlay's FairPlay (playfair) compiled via CMake → libplayfair.so.
@@ -59,6 +55,9 @@ android {
             applicationId = "com.ferry.receiver.googletv"
             minSdk = 29        // Google TV requires Android 10+
             versionNameSuffix = "-googletv"
+            // Keeps x86/x86_64: Android TV runs on Intel boxes and ChromeOS, and this is the
+            // flavor people run in an emulator.
+            ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") }
         }
         create("firetv") {
             dimension = "platform"
@@ -67,6 +66,10 @@ android {
             applicationId = "com.ferry.receiver"
             minSdk = 25        // Fire TV supports Android 7.1+
             versionNameSuffix = "-firetv"
+            // ARM only. Amazon has never shipped an x86 Fire TV — every Stick, Cube, and Omni /
+            // 4-Series panel is MediaTek, Amlogic, or Novatek, all ARM. The x86 and x86_64 copies
+            // were dead weight in an APK that installs onto a stick with very little free storage.
+            ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a") }
         }
     }
 
@@ -178,14 +181,21 @@ android {
             "UnusedResources",
             // Advisory: the project deliberately supports a wide API range for old TVs;
             // targetSdk is bumped deliberately, not on every new platform release.
-            "OldTargetApi"
+            "OldTargetApi",
+            // Fires on the firetv flavor for dropping x86_64. That flavor targets Fire TV and
+            // nothing else, and Amazon has never shipped an x86 Fire TV — the ABI was dead weight
+            // in an APK that installs onto a stick with very little free storage. ChromeOS is
+            // served by the googletv flavor, which still ships x86 and x86_64.
+            "ChromeOsAbiSupport"
         )
     }
 
     packaging {
-        jniLibs {
-            keepDebugSymbols += "**/*.so"
-        }
+        // NOTE: do NOT add `keepDebugSymbols += "**/*.so"` here. It applies to every variant, not
+        // just debug, and it is not a no-op: it shipped full DWARF debug info inside the release
+        // APK. In v4.0.0 that was ~81% of libalac.so — 1.4 MB of .debug_* sections per ABI, for a
+        // decoder whose actual .text is 138 KB. AGP strips release native libraries by default;
+        // letting it do that is the whole fix.
         resources {
             // BouncyCastle (and some other crypto libs) include OSGI manifest files
             // that conflict when multiple jars are merged. Exclude them — they are

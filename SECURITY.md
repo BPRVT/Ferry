@@ -45,8 +45,9 @@ network, every device present can reach Ferry's parsers.
 ### Out of scope
 
 - **Anything requiring an attacker to already be on your LAN, where the impact is only
-  "can mirror to your TV."** That is the intended function. Enable PIN pairing
-  (Settings → Require PIN) if you want access control.
+  "can mirror to your TV."** That is the intended function. Turn on **Settings → Require
+  pairing PIN** if you want access control — see the note below, because as of 4.5.0 it is
+  **off by default**.
 - **The AirPlay protocol's own weaknesses.** Legacy AirPlay auth is weak by design;
   Ferry implements the protocol, it does not fix it.
 - Physical access to the device, or a rooted/compromised Fire TV.
@@ -73,10 +74,31 @@ ALAC decoder and the reverse-engineered FairPlay C were not audited internally �
 mitigation is the bounds checking at the JNI boundary, not confidence in the code behind
 it.
 
+## The PIN default, stated plainly
+
+**As of 4.5.0, "Require pairing PIN" is OFF by default.** Ferry ships open: any device
+that can reach the subnet can mirror to the TV without anyone touching it. In that
+configuration the only access control is your network perimeter.
+
+This is a deliberate trade, not an accident. Ferry is a TV appliance driven by a remote
+control, and a PIN on every connection is real friction on a network the owner already
+trusts. Versions 2.0.5 through 4.0.0 defaulted it ON; 4.5.0 reverses that.
+
+**Turn it on if any of these are true:** the TV shares a network with guests, you're on
+shared, building-wide, or open Wi-Fi, or the network carries devices you don't control.
+With it on, a sender must complete SRP pairing against a code shown on the TV, and
+pair-setup locks out permanently after 10 failed attempts (the toggle itself is the
+owner-present reset, since reaching it needs physical access to the TV).
+
+**Upgrading from 4.0.0 or earlier does not silently disable your PIN.** Settings are
+persisted as a whole record, so if you have ever changed any setting in the app, your
+stored value wins and nothing changes. The new default reaches only installs that have
+never written a setting — fresh installs, and users who never opened Settings.
+
 ## Hardening you can do
 
-1. **Enable PIN pairing** (Settings) so an unknown device can't mirror without a code
-   shown on your TV.
+1. **Turn on PIN pairing** (Settings → Require pairing PIN) so an unknown device can't
+   mirror without a code shown on your TV. **This is off by default** — see above.
 2. **Put the Fire TV on an IoT/guest VLAN** if you have one, separated from laptops and
    phones that hold anything sensitive.
 3. **Block the Fire TV's outbound WAN access at the router.** Ferry needs no internet.

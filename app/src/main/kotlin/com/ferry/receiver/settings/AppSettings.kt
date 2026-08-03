@@ -52,14 +52,24 @@ data class AppSettings(
     // ─── AirPlay specific ──────────────────────────────────────────────────
     /**
      * Whether AirPlay connections require PIN authentication.
-     * When true (default): the sender must enter a 4-digit PIN shown on the TV.
-     * When false: any device on the local network can mirror without confirmation.
+     * When true: the sender must enter a 4-digit PIN shown on the TV.
+     * When false (default): any device on the local network can mirror without confirmation.
      *
-     * Defaults ON. Ferry listens on every interface with no transport authentication of its own, so
-     * without this any device that can reach the LAN — including a guest or an untrusted IoT device
-     * on the same subnet — can put arbitrary video on the screen.
+     * **Defaults OFF, and that is an access-control decision, not an oversight.** Ferry listens on
+     * every interface and the AirPlay protocol gives it no transport authentication of its own, so
+     * with this off, anything that can reach the subnet — a guest's phone, an untrusted IoT device,
+     * anyone on the same Wi-Fi — can put arbitrary video and audio on the screen without touching
+     * the TV. The protection in that configuration is the network perimeter and nothing else.
+     *
+     * It defaults off because the alternative costs every connection a PIN round-trip on a remote
+     * control, on a device that is usually on a home network the owner already trusts. That is the
+     * right trade for that setting, and the wrong one on shared, guest, or open Wi-Fi — where this
+     * should be turned on. See SECURITY.md.
+     *
+     * Turning it on also gates pairing behind the SRP flow with a 10-attempt persistent lockout
+     * (MAX_PAIR_ATTEMPTS in RtspHandler).
      */
-    val airPlayPinAuthEnabled: Boolean = true,
+    val airPlayPinAuthEnabled: Boolean = false,
 
     /**
      * When true, Ferry withholds the AirPlay video-URL capability bit so senders always mirror the

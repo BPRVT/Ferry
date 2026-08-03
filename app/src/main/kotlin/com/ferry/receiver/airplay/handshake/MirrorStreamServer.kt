@@ -69,6 +69,8 @@ class MirrorStreamServer(
     @Volatile private var decoder: VideoDecoder? = null   // owned by the decoder thread
     private var lastSps: ByteArray? = null
     private var lastPps: ByteArray? = null
+    // Reusable payload read buffer, owned solely by the reader thread. See [readBufferFor].
+    private var readBuffer = ByteArray(INITIAL_PAYLOAD_BUFFER)
     // The Surface the current decoder was built against. The SurfaceView destroys its Surface when
     // the app backgrounds and creates a NEW one on return, so we watch for the identity changing
     // and rebuild the decoder — otherwise video stays black after foregrounding.
@@ -127,7 +129,12 @@ class MirrorStreamServer(
                     Logger.w("Mirror: bad payloadSize=$payloadSize type=$payloadType — stopping")
                     break
                 }
-                val payload = ByteArray(payloadSize)
+                // Read into a buffer that is reused across frames. Safe because nothing retains it:
+                // type 0 hands it straight to cipher.update(), which returns its own array, and
+                // parseConfig copies the SPS/PPS out. It used to be a fresh ByteArray per frame —
+                // at 60 fps that was a second large short-lived allocation on top of the decrypted
+                // one, on a device with very little GC headroom.
+                val payload = readBufferFor(payloadSize)
                 if (!readFully(input, payload, payloadSize)) break
                 when (payloadType) {
                     0 -> {
@@ -136,7 +143,10 @@ class MirrorStreamServer(
                         // Decrypt, then rewrite AVCC length prefixes to Annex-B start codes in the
                         // same buffer — both are 4 bytes, so no copy is needed. This used to
                         // allocate a ByteArrayOutputStream and its toByteArray() copy per frame.
-                        val decrypted = cipher.update(payload)
+                        // Offset/length form: [payload] is the shared buffer and may be longer than
+                        // this frame, so the whole-array overload would decrypt stale tail bytes and
+                        // desync the CTR keystream for every frame after it.
+                        val decrypted = cipher.update(payload, 0, payloadSize)
                         val len = MirrorCrypto.avccToAnnexBInPlace(decrypted)
                         if (len > 0) {
                             val flags = Companion.classify(decrypted, len)
@@ -147,7 +157,7 @@ class MirrorStreamServer(
                             ))
                         }
                     }
-                    1 -> parseConfig(payload)?.let { enqueue(it) }
+                    1 -> parseConfig(payload, payloadSize)?.let { enqueue(it) }
                     else -> Logger.v { "Mirror: ignoring payload type $payloadType ($payloadSize B)" }
                 }
             }
@@ -204,16 +214,23 @@ class MirrorStreamServer(
         }
     }
 
-    private fun parseConfig(payload: ByteArray): Config? = try {
-        val spsSize = ((payload[6].toInt() and 0xFF) shl 8) or (payload[7].toInt() and 0xFF)
-        val sps = payload.copyOfRange(8, 8 + spsSize)
-        val ppsLenOffset = 8 + spsSize + 1                   // skip the 1-byte PPS count
-        val ppsSize = ((payload[ppsLenOffset].toInt() and 0xFF) shl 8) or
-            (payload[ppsLenOffset + 1].toInt() and 0xFF)
-        Config(sps, payload.copyOfRange(ppsLenOffset + 2, ppsLenOffset + 2 + ppsSize))
-    } catch (e: Exception) {
-        Logger.e("Mirror: failed to parse SPS/PPS", e); null
+    /**
+     * Returns a buffer of at least [size] bytes for the reader thread to read one payload into.
+     *
+     * Grows on demand and keeps the larger buffer, except past [MAX_RETAINED_BUFFER]: an outsized
+     * frame gets a one-off array that is dropped afterwards rather than pinning megabytes for the
+     * rest of the session. [MAX_PAYLOAD] already caps a single frame, but that cap is generous and
+     * sender-controlled, and this runs on devices with very little headroom.
+     */
+    private fun readBufferFor(size: Int): ByteArray {
+        if (size <= readBuffer.size) return readBuffer
+        val grown = ByteArray(size)
+        if (size <= MAX_RETAINED_BUFFER) readBuffer = grown
+        return grown
     }
+
+    private fun parseConfig(payload: ByteArray, size: Int): Config? =
+        Companion.parseSpsPps(payload, size)?.let { (sps, pps) -> Config(sps, pps) }
 
     // ─── Decoder thread: consume the queue; the only thread that touches the decoder ──────────
     private fun runDecoder() {
@@ -330,6 +347,11 @@ class MirrorStreamServer(
 
     companion object {
         private const val MAX_PAYLOAD = 8 * 1024 * 1024        // 8 MB sanity cap per frame
+
+        /** Starting size of the reusable payload buffer — comfortably above a 1080p frame. */
+        private const val INITIAL_PAYLOAD_BUFFER = 512 * 1024
+        /** Above this, an outsized frame gets a throwaway array instead of being retained. */
+        private const val MAX_RETAINED_BUFFER = 2 * 1024 * 1024
         private const val FRAME_INTERVAL_US = 1_000_000L / 60  // monotonic PTS hint (~60fps)
 
         /**
@@ -354,6 +376,34 @@ class MirrorStreamServer(
         /** Overall ceiling on waiting for the Surface — unchanged; only the granularity improved. */
         private const val SURFACE_WAIT_TIMEOUT_MS = 5_000L
         private const val SURFACE_POLL_MS = 5L
+
+        /**
+         * Extracts (SPS, PPS) from a type-1 config payload, or null if it is malformed.
+         *
+         * [size] is the payload's real length, which is **not** `payload.size` — the reader reuses
+         * one buffer and it is usually longer than the frame in it. Every offset is therefore
+         * checked against [size] rather than against the array bounds: a hostile or corrupt length
+         * field that points past the frame but inside the buffer would otherwise read stale bytes
+         * from an earlier frame without throwing, and the decoder would be configured from them.
+         *
+         * In the companion, and `internal`, so it is testable without opening a socket.
+         */
+        internal fun parseSpsPps(payload: ByteArray, size: Int): Pair<ByteArray, ByteArray>? = try {
+            require(size >= 8) { "config payload too short: $size" }
+            val spsSize = ((payload[6].toInt() and 0xFF) shl 8) or (payload[7].toInt() and 0xFF)
+            require(spsSize > 0 && 8 + spsSize <= size) { "bad spsSize=$spsSize (payload $size)" }
+            val sps = payload.copyOfRange(8, 8 + spsSize)
+            val ppsLenOffset = 8 + spsSize + 1               // skip the 1-byte PPS count
+            require(ppsLenOffset + 2 <= size) { "pps length field past end (payload $size)" }
+            val ppsSize = ((payload[ppsLenOffset].toInt() and 0xFF) shl 8) or
+                (payload[ppsLenOffset + 1].toInt() and 0xFF)
+            require(ppsSize > 0 && ppsLenOffset + 2 + ppsSize <= size) {
+                "bad ppsSize=$ppsSize (payload $size)"
+            }
+            sps to payload.copyOfRange(ppsLenOffset + 2, ppsLenOffset + 2 + ppsSize)
+        } catch (e: Exception) {
+            Logger.e("Mirror: failed to parse SPS/PPS", e); null
+        }
 
         /**
          * True if no later frame can reference this one, so dropping it under load is invisible
