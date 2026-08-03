@@ -37,6 +37,16 @@ class AirPlayFeaturesTest {
     }
 
     @Test
+    fun `screen mirroring stays advertised in both modes`() {
+        // Bit 7 is SupportsAirPlayScreen. Forcing mirroring must not disturb it — clearing it
+        // would take Ferry out of the Control Center picker entirely, which is the exact
+        // opposite of what the setting is for.
+        val screenBit = 1L shl 7
+        assertEquals(screenBit, AirPlayFeatures.value(forceScreenMirroring = false) and screenBit)
+        assertEquals(screenBit, AirPlayFeatures.value(forceScreenMirroring = true) and screenBit)
+    }
+
+    @Test
     fun `txt record splits into low then high 32-bit halves`() {
         // The high half must survive the split — a naive Int cast would drop it and senders would
         // see a device with no AirPlay 2 support at all.

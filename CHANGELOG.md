@@ -47,10 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`TECHNICAL_SPEC.md` §8 described a bitmask Ferry doesn't advertise.** The bit
-  table claimed VideoFairPlay (bit 2) was unset and AirPlayVideoV2 (bit 26) was
-  set; the actual value has it exactly the other way round. Corrected against
-  the constant.
+- **`TECHNICAL_SPEC.md` §8 documented the wrong bit numbers.** The feature-flag
+  table — inherited verbatim from upstream, written in future tense before there
+  was an implementation — put Screen at bit 5, Audio at 7 and AudioRedundant at
+  9. The two public references both put them at 7, 9 and 11. It also disagreed
+  with Ferry's own constant about bits 2 and 26.
+
+  Rebuilt from the constant, with names checked against the
+  [Unofficial AirPlay Specification](https://openairplay.github.io/airplay-spec/features.html)
+  and [AirPlay 2 Internals](https://emanuelecozzi.net/docs/airplay2/features/),
+  and the bits neither reference names now marked as undocumented rather than
+  given plausible-looking labels. Nothing behavioral — the advertised mask is
+  unchanged apart from the setting above — but §8 is the page you'd trust when
+  touching this, and it was confidently wrong.
 
 ---
 

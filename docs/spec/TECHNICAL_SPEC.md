@@ -336,21 +336,47 @@ sees it: the `_airplay._tcp` mDNS TXT record, `GET /info`, and `GET /server-info
 agree — a sender that discovers one capability set and is told a different one during the
 handshake fails in ways that don't point back here.
 
-The bits that carry meaning for Ferry:
+> **Provenance.** The mask is inherited verbatim from upstream PhairPlay, which in turn took it
+> from the reverse-engineered receivers that preceded it. It is empirically load-bearing — real
+> senders accept it — but it was never derived bit-by-bit from a spec. The table below was
+> reconstructed *from the constant*, with names taken from the two public references
+> ([Unofficial AirPlay Specification](https://openairplay.github.io/airplay-spec/features.html)
+> and [AirPlay 2 Internals](https://emanuelecozzi.net/docs/airplay2/features/)). Where those two
+> disagree or say nothing, the row says so rather than guessing.
+>
+> An earlier version of this table listed Screen at bit 5, Audio at bit 7 and AudioRedundant at
+> bit 9. Those are off by two: the references put them at 7, 9 and 11. Anything written against
+> the old numbering should be re-checked.
 
-| Bit | Feature | Set | Notes |
-|---|---|---|---|
-| 0 | Video | ✅ | AirPlay **video URL** mode — sender hands over a media URL, receiver plays it (`POST /play`, `/rate`, `/scrub`, `/stop`). Not mirroring. |
-| 1 | Photo | ✅ | JPEG/PNG via `/photo` endpoint — see §9 |
-| 2 | VideoFairPlay | ✅ | Advertised; FairPlay handshake is the captured-constant path, see §11 |
-| 5 | Screen | ✅ | Screen mirroring |
-| 6 | Screen Rotate | ✅ | Landscape/portrait |
-| 7 | Audio | ✅ | ALAC / AAC-LC / AAC-ELD / LPCM |
-| 9 | AudioRedundant | ✅ | |
-| 14 | AudioSyncedVideo | ✅ | A/V sync via NTP |
-| 23 | HasUnifiedAdvertiserInfo | ✅ | |
-| 26 | SupportsAirPlayVideoV2 | ❌ | *Not* set in the mask — only V1 (bit 0) is advertised |
-| 27 | MetaDataFeatures_0 | ✅ | |
+Bits set in `0x1E5A7FFFF7`, and what the references call them:
+
+| Bit | Name | Notes |
+|---|---|---|
+| 0 | SupportsAirPlayVideoV1 | AirPlay **video URL** mode — sender hands over a media URL and the receiver plays it (`POST /play`, `/rate`, `/scrub`, `/stop`). **Not** mirroring. Cleared by the setting below. |
+| 1 | SupportsAirPlayPhoto | JPEG/PNG via `/photo` — see §9 |
+| 2 | *undocumented* | Set. openairplay calls it VideoFairPlay; AirPlay 2 Internals leaves it unnamed |
+| 4, 6, 8, 10, 12, 13 | *undocumented* | Set; no reference names them |
+| 5 | SupportsAirPlaySlideshow | |
+| 7 | **SupportsAirPlayScreen** | **Screen mirroring** — the other half of the mode choice |
+| 9 | SupportsAirPlayAudio | ALAC / AAC-LC / AAC-ELD / LPCM |
+| 11 | AudioRedundant | |
+| 14 | Authentication_4 | FairPlay authentication — see §11 |
+| 15 | MetadataFeatures_0 | Artwork to receiver |
+| 16 | MetadataFeatures_1 | Track progress to receiver |
+| 17 | MetadataFeatures_2 | NowPlaying via DAAP |
+| 18–20 | AudioFormats_0…2 | |
+| 21, 22, 25, 28, 36 | *undocumented* | Set; no reference names them |
+| 27 | SupportsLegacyPairing | Matches the SRP PIN path in `LegacyPairSetupPin.kt` |
+| 30 | HasUnifiedAdvertiserInfo | |
+| 33 | SupportsAirPlayVideoPlayQueue | |
+| 34 | SupportsAirPlayFromCloud | |
+| 35 | SupportsTLS_PSK | |
+
+Notable bits that are **not** set: 23 (`Authentication_1`, RSA — listed as N/A by the references),
+26 (`Authentication_8`, MFi), 38 (`SupportsUnifiedMediaControl`), and 40
+(`SupportsBufferedAudio`) — the last despite Ferry implementing buffered audio-only (type 103).
+That is inherited, not deliberate; senders evidently do not gate the feature on it, since Apple
+Music playback works. Worth revisiting only if a sender is ever seen refusing that path.
 
 ### Forcing screen mirroring
 

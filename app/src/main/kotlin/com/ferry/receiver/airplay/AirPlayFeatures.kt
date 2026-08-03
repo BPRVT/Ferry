@@ -18,12 +18,14 @@ import java.util.Locale
 object AirPlayFeatures {
 
     /**
-     * Bit 0 — `Video`: the AirPlay *video URL* mode, where the sender hands over a media URL and
-     * the receiver fetches and plays the stream itself, rather than mirroring the sender's screen.
-     * Handled by the `POST /play`, `/rate`, `/scrub`, `/stop` endpoints in [RtspHandler].
+     * Bit 0 — `SupportsAirPlayVideoV1`: the AirPlay *video URL* mode, where the sender hands over a
+     * media URL and the receiver fetches and plays the stream itself, rather than mirroring the
+     * sender's screen. Handled by the `POST /play`, `/rate`, `/scrub`, `/stop` endpoints in
+     * [RtspHandler].
      *
      * This is the bit that decides which of the two AirPlay modes a sender offers, and it is the
-     * only one [MIRROR_ONLY] clears.
+     * only one [MIRROR_ONLY] clears — screen mirroring lives at bit 7 (`SupportsAirPlayScreen`)
+     * and is left set.
      */
     private const val BIT_VIDEO = 1L shl 0
 
