@@ -253,6 +253,7 @@ class FerryService : Service() {
             mirrorHeight = settings.mirrorHeight,
             audioEnabled = settings.mirrorAudioEnabled,
             pinAuthEnabled = settings.airPlayPinAuthEnabled,
+            forceScreenMirroring = settings.forceScreenMirroring,
             // Delegate to the current provider at call time — captures the field, not a fixed value.
             // When MainActivity calls setVideoSurfaceProvider(), future surface requests use it.
             videoSurfaceProvider = { videoSurfaceProvider?.invoke() },

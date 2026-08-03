@@ -327,23 +327,48 @@ The `firetv` flavor MUST NOT use any API gated on API level 26+ without a versio
 
 ## 8. Supported AirPlay Feature Flags
 
-The `features` TXT record is a bitmask that tells macOS which AirPlay capabilities the receiver has. Ferry v1.0 will advertise the following flags (based on the open AirPlay spec):
+The `features` TXT record is a bitmask that tells a sender which AirPlay capabilities the receiver
+has. The value is **`0x5A7FFFF7,0x1E`** — a 64-bit mask published as two 32-bit halves
+(low,high), i.e. `0x1E5A7FFFF7`.
 
-| Bit | Feature | Ferry v1 | Notes |
+It is defined once, in `AirPlayFeatures.kt`, and read from there by all three places a sender
+sees it: the `_airplay._tcp` mDNS TXT record, `GET /info`, and `GET /server-info`. They must
+agree — a sender that discovers one capability set and is told a different one during the
+handshake fails in ways that don't point back here.
+
+The bits that carry meaning for Ferry:
+
+| Bit | Feature | Set | Notes |
 |---|---|---|---|
-| 0 | Video | ✅ Supported | H.264 AVC mandatory |
-| 1 | Photo | ✅ Supported | JPEG/PNG via `/photo` endpoint — see §9 |
-| 2 | VideoFairPlay | ❌ Not supported | Requires Apple FPS license — see §11 |
-| 5 | Screen | ✅ Supported | Screen mirroring |
-| 6 | Screen Rotate | ✅ Supported | Landscape/portrait |
-| 7 | Audio | ✅ Supported | ALAC / AAC-LC / AAC-ELD / LPCM |
-| 9 | AudioRedundant | ✅ Supported | |
-| 14 | AudioSyncedVideo | ✅ Supported | A/V sync via NTP |
-| 23 | HasUnifiedAdvertiserInfo | ✅ Supported | |
-| 26 | SupportsAirPlayVideoV2 | ✅ Supported | |
-| 27 | MetaDataFeatures_0 | ✅ Supported | |
+| 0 | Video | ✅ | AirPlay **video URL** mode — sender hands over a media URL, receiver plays it (`POST /play`, `/rate`, `/scrub`, `/stop`). Not mirroring. |
+| 1 | Photo | ✅ | JPEG/PNG via `/photo` endpoint — see §9 |
+| 2 | VideoFairPlay | ✅ | Advertised; FairPlay handshake is the captured-constant path, see §11 |
+| 5 | Screen | ✅ | Screen mirroring |
+| 6 | Screen Rotate | ✅ | Landscape/portrait |
+| 7 | Audio | ✅ | ALAC / AAC-LC / AAC-ELD / LPCM |
+| 9 | AudioRedundant | ✅ | |
+| 14 | AudioSyncedVideo | ✅ | A/V sync via NTP |
+| 23 | HasUnifiedAdvertiserInfo | ✅ | |
+| 26 | SupportsAirPlayVideoV2 | ❌ | *Not* set in the mask — only V1 (bit 0) is advertised |
+| 27 | MetaDataFeatures_0 | ✅ | |
 
-The resulting hex value for the `features` field: `0x5A7FFFF7,0x1E` (will be refined during implementation to include the Photo bit).
+### Forcing screen mirroring
+
+Bit 0 is what decides which of the two AirPlay modes a sender offers. With it set, an app playing
+a plain remote stream will hand off the URL and open its own player on the TV, leaving the sending
+device as a remote; an app that can't hand off a URL (custom renderer, compositing, undelegatable
+DRM) mirrors instead. Which one you get is the *sending app's* choice.
+
+The **Always mirror the screen** setting (`AppSettings.forceScreenMirroring`) clears bit 0,
+yielding `0x5A7FFFF6,0x1E`. Senders then never offer the video route and every session arrives as
+mirroring.
+
+Withholding the capability is the only reliable lever. Rejecting `POST /play` at the RTSP layer
+does not work: by the time it arrives the sender has committed to video mode, so a rejection
+produces a failed playback rather than a fallback to mirroring.
+
+The reverse — forcing *every* session to use the video route — is not possible from the receiver.
+It requires the sending app to have a URL it can hand over, and Ferry cannot make one exist.
 
 ---
 

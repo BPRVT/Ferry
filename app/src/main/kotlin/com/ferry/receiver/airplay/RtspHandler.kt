@@ -74,7 +74,12 @@ open class RtspHandler(
     /** Persistent store of paired controllers' Ed25519 keys (for pair-verify). */
     private val pairingStore: com.ferry.receiver.airplay.handshake.PairingStore? = null,
     /** Shows ([pin]) or hides (null) the on-screen pairing PIN during SRP pair-setup. */
-    private val onShowPin: (pin: String?) -> Unit = {}
+    private val onShowPin: (pin: String?) -> Unit = {},
+    /**
+     * Advertise mirroring only, withholding the AirPlay video-URL capability
+     * (AppSettings.forceScreenMirroring). See [AirPlayFeatures.MIRROR_ONLY].
+     */
+    private val forceScreenMirroring: Boolean = false
 ) {
 
     // ─── Legacy AirPlay SRP PIN pairing (only used when pinAuthEnabled) ───────
@@ -422,7 +427,7 @@ open class RtspHandler(
     private fun handleServerInfo(request: RtspRequest): RtspResponse {
         val info = mapOf(
             "deviceid" to com.ferry.receiver.util.NetworkUtils.getMacAddress(),
-            "features" to 0x1E5A7FFFF7L,
+            "features" to AirPlayFeatures.value(forceScreenMirroring),
             "model" to "AppleTV5,3",
             "protovers" to "1.1",
             "srcvers" to "220.68",
@@ -476,7 +481,11 @@ open class RtspHandler(
     private fun handleInfo(request: RtspRequest): RtspResponse = RtspResponse(
         statusCode = 200,
         statusMessage = "OK",
-        bodyBytes = InfoResponder.build(context, displayWidth, displayHeight, pinRequired = pinAuthEnabled),
+        bodyBytes = InfoResponder.build(
+            context, displayWidth, displayHeight,
+            pinRequired = pinAuthEnabled,
+            forceScreenMirroring = forceScreenMirroring
+        ),
         contentType = "application/x-apple-binary-plist",
         protocol = request.responseProtocol()
     )

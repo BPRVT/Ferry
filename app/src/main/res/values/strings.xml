@@ -102,6 +102,8 @@
     <string name="setting_debug_overlay_subtitle">Show live FPS, queue and drop stats while streaming</string>
     <string name="setting_force_high_res">Higher resolution (1440p)</string>
     <string name="setting_force_high_res_subtitle">Sharper mirroring; uses more CPU. Off = 1080p</string>
+    <string name="setting_force_screen_mirroring">Always mirror the screen</string>
+    <string name="setting_force_screen_mirroring_subtitle">Stops apps opening their own player on the TV. Off = apps choose</string>
     <string name="setting_smart_fill">Smart fill</string>
     <string name="setting_smart_fill_subtitle">Fill the screen, trimming a little off the edges. Off = show everything with black bars</string>
     <string name="setting_audio_boost">Audio boost</string>

@@ -111,6 +111,7 @@ class SettingsRepository(private val context: Context) {
         miracastEnabled    = this[Keys.MIRACAST_ENABLED]        ?: true,
         castEnabled        = this[Keys.CAST_ENABLED]            ?: true,
         airPlayPinAuthEnabled = this[Keys.AIRPLAY_PIN_AUTH]     ?: true,
+        forceScreenMirroring = this[Keys.FORCE_SCREEN_MIRRORING] ?: false,
         startOnBoot        = this[Keys.START_ON_BOOT]           ?: false,
         showDebugOverlay   = this[Keys.SHOW_DEBUG_OVERLAY]      ?: false,
         forceHighResolution = this[Keys.FORCE_HIGH_RESOLUTION]  ?: false,
@@ -129,6 +130,7 @@ class SettingsRepository(private val context: Context) {
         this[Keys.MIRACAST_ENABLED]     = settings.miracastEnabled
         this[Keys.CAST_ENABLED]         = settings.castEnabled
         this[Keys.AIRPLAY_PIN_AUTH]     = settings.airPlayPinAuthEnabled
+        this[Keys.FORCE_SCREEN_MIRRORING] = settings.forceScreenMirroring
         this[Keys.START_ON_BOOT]        = settings.startOnBoot
         this[Keys.SHOW_DEBUG_OVERLAY]   = settings.showDebugOverlay
         this[Keys.FORCE_HIGH_RESOLUTION] = settings.forceHighResolution
@@ -149,6 +151,7 @@ class SettingsRepository(private val context: Context) {
         val MIRACAST_ENABLED    = booleanPreferencesKey("miracast_enabled")
         val CAST_ENABLED        = booleanPreferencesKey("cast_enabled")
         val AIRPLAY_PIN_AUTH    = booleanPreferencesKey("airplay_pin_auth")
+        val FORCE_SCREEN_MIRRORING = booleanPreferencesKey("force_screen_mirroring")
         val SMART_FILL          = booleanPreferencesKey("smart_fill")
         val START_ON_BOOT       = booleanPreferencesKey("start_on_boot")
         val SHOW_DEBUG_OVERLAY  = booleanPreferencesKey("show_debug_overlay")

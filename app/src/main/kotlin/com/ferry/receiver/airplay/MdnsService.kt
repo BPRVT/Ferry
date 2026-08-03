@@ -49,7 +49,12 @@ class MdnsService(
      * Only the `_airplay._tcp` service name is reported (not the `_raop._tcp` name,
      * which has a MAC address prefix and is not shown to users).
      */
-    private val onActualNameRegistered: (String) -> Unit = {}
+    private val onActualNameRegistered: (String) -> Unit = {},
+    /**
+     * Advertise mirroring only, withholding the AirPlay video-URL capability
+     * (AppSettings.forceScreenMirroring). See [AirPlayFeatures.MIRROR_ONLY].
+     */
+    private val forceScreenMirroring: Boolean = false
 ) {
 
     // Android's built-in mDNS manager — handles multicast registration
@@ -175,7 +180,7 @@ class MdnsService(
 
             // Core identity TXT records
             setAttribute("deviceid", NetworkUtils.getMacAddress())
-            setAttribute("features", AIRPLAY_FEATURES)
+            setAttribute("features", AirPlayFeatures.txtRecord(forceScreenMirroring))
             setAttribute("model", AIRPLAY_MODEL)
             setAttribute("srcvers", AIRPLAY_SERVER_VERSION)
             setAttribute("vv", "2")                             // AirPlay protocol version 2
@@ -312,12 +317,6 @@ class MdnsService(
 
         /** AirPlay RTSP port — [RtspHandler] must listen on this port. */
         const val AIRPLAY_PORT = 7000
-
-        /**
-         * AirPlay feature bitmask: advertise screen mirroring, video, and audio support.
-         * See TECHNICAL_SPEC.md §8 for the full bit-level breakdown.
-         */
-        private const val AIRPLAY_FEATURES = "0x5A7FFFF7,0x1E"
 
         /** Pretend to be an Apple TV so macOS uses the screen mirroring protocol. */
         private const val AIRPLAY_MODEL = "AppleTV5,3"

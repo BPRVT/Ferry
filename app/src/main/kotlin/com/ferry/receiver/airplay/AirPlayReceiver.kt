@@ -59,6 +59,11 @@ class AirPlayReceiver(
     private val audioEnabled: Boolean = false,
     /** Require HomeKit-style SRP PIN pairing before streaming (AppSettings.airPlayPinAuthEnabled). */
     private val pinAuthEnabled: Boolean = false,
+    /**
+     * Advertise mirroring only, so senders never offer the AirPlay video-URL route
+     * (AppSettings.forceScreenMirroring). See [AirPlayFeatures.MIRROR_ONLY].
+     */
+    private val forceScreenMirroring: Boolean = false,
     /** Lazy Surface provider — called only for video streams when RECORD arrives. */
     private val videoSurfaceProvider: () -> Surface?,
     private val onStateChanged: (ProtocolState) -> Unit,
@@ -204,7 +209,8 @@ class AirPlayReceiver(
         mdnsService = MdnsService(
             context = context,
             onStateChange = { state -> emitState(state) },
-            onActualNameRegistered = { actualName -> onActualNameRegistered(actualName) }
+            onActualNameRegistered = { actualName -> onActualNameRegistered(actualName) },
+            forceScreenMirroring = forceScreenMirroring
         ).also { it.start(displayName.ifBlank { null }) }
         Logger.d("mDNS service started")
     }
@@ -249,9 +255,11 @@ class AirPlayReceiver(
             onRemoteControlInfo = { dacpId, activeRemote -> dacpClient.configure(dacpId, activeRemote) },
             pinAuthEnabled = pinAuthEnabled,
             pairingStore = pairingStore,
-            onShowPin = { pin -> onPinChanged(pin) }
+            onShowPin = { pin -> onPinChanged(pin) },
+            forceScreenMirroring = forceScreenMirroring
         ).also { it.start(scope) }
-        Logger.i("RTSP handler started on port 7000 (audioEnabled=$audioEnabled pinAuth=$pinAuthEnabled)")
+        Logger.i("RTSP handler started on port 7000 (audioEnabled=$audioEnabled pinAuth=$pinAuthEnabled " +
+                 "forceScreenMirroring=$forceScreenMirroring)")
     }
 
     // ─── Private: streaming lifecycle ────────────────────────────────────────

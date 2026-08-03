@@ -1,6 +1,7 @@
 package com.ferry.receiver.airplay.handshake
 
 import android.content.Context
+import com.ferry.receiver.airplay.AirPlayFeatures
 import com.ferry.receiver.util.NetworkUtils
 
 /**
@@ -16,7 +17,13 @@ import com.ferry.receiver.util.NetworkUtils
  */
 object InfoResponder {
 
-    fun build(context: Context, width: Int = 1920, height: Int = 1080, pinRequired: Boolean = false): ByteArray {
+    fun build(
+        context: Context,
+        width: Int = 1920,
+        height: Int = 1080,
+        pinRequired: Boolean = false,
+        forceScreenMirroring: Boolean = false
+    ): ByteArray {
         val mac = NetworkUtils.getMacAddress()
         // When PIN access control is on, set the "pairing/PIN required" status bit so the sender runs
         // the SRP pair-setup flow. NOTE: exact flag semantics are sender-version-dependent — verify
@@ -25,7 +32,7 @@ object InfoResponder {
         val info = mapOf(
             "deviceID" to mac,
             "macAddress" to mac,
-            "features" to AIRPLAY_FEATURES,
+            "features" to AirPlayFeatures.value(forceScreenMirroring),
             "statusFlags" to statusFlags,
             "model" to MODEL,
             "name" to NetworkUtils.getDeviceName(context),
@@ -67,9 +74,6 @@ object InfoResponder {
         )
         return PlistCodec.encode(info)
     }
-
-    /** 64-bit features value; mirrors MdnsService's "0x5A7FFFF7,0x1E" (low,high 32-bit halves). */
-    private const val AIRPLAY_FEATURES = 0x1E5A7FFFF7L
 
     /** Matches RPiPlay's /info statusFlags (0x44). */
     private const val STATUS_FLAGS = 68L

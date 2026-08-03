@@ -58,6 +58,7 @@ class SettingsFragment : Fragment() {
     private lateinit var rowCast: View
     private lateinit var rowMirrorAudio: View
     private lateinit var rowPinAuth: View
+    private lateinit var rowForceScreenMirroring: View
     private lateinit var rowSmartFill: View
     private lateinit var rowAudioBoost: LinearLayout
     private lateinit var textAudioBoostValue: TextView
@@ -99,6 +100,7 @@ class SettingsFragment : Fragment() {
         rowCast             = view.findViewById(R.id.row_cast)
         rowMirrorAudio      = view.findViewById(R.id.row_mirror_audio)
         rowPinAuth          = view.findViewById(R.id.row_pin_auth)
+        rowForceScreenMirroring = view.findViewById(R.id.row_force_screen_mirroring)
         rowSmartFill        = view.findViewById(R.id.row_smart_fill)
         rowAudioBoost       = view.findViewById(R.id.row_audio_boost)
         textAudioBoostValue = view.findViewById(R.id.text_audio_boost_value)
@@ -126,6 +128,8 @@ class SettingsFragment : Fragment() {
         configureToggleRow(rowCast,         R.string.setting_cast_enabled,       R.string.setting_cast_subtitle)
         configureToggleRow(rowMirrorAudio,  R.string.setting_mirror_audio,       R.string.setting_mirror_audio_subtitle)
         configureToggleRow(rowPinAuth,      R.string.setting_pin_auth,           R.string.setting_pin_auth_subtitle)
+        configureToggleRow(rowForceScreenMirroring,
+            R.string.setting_force_screen_mirroring, R.string.setting_force_screen_mirroring_subtitle)
         configureToggleRow(rowSmartFill,    R.string.setting_smart_fill,         R.string.setting_smart_fill_subtitle)
         configureToggleRow(rowStartOnBoot,  R.string.setting_start_on_boot,      0)
         configureToggleRow(rowDebugOverlay, R.string.setting_debug_overlay,      R.string.setting_debug_overlay_subtitle)
@@ -177,6 +181,7 @@ class SettingsFragment : Fragment() {
         setToggle(rowMirrorAudio,  settings.mirrorAudioEnabled)
         setToggle(rowPinAuth,      settings.airPlayPinAuthEnabled)
         setToggle(rowSmartFill,    settings.smartFillEnabled)
+        setToggle(rowForceScreenMirroring, settings.forceScreenMirroring)
         setToggle(rowStartOnBoot,  settings.startOnBoot)
         setToggle(rowDebugOverlay, settings.showDebugOverlay)
         setToggle(rowForceHighRes, settings.forceHighResolution)
@@ -227,6 +232,11 @@ class SettingsFragment : Fragment() {
             // which a remote guesser does not have.
             PairingStore(requireContext()).resetFailedAttempts()
             saveAndRestart { it.copy(airPlayPinAuthEnabled = enabled) }
+        }
+        // Restart: the features bitmask is baked into the mDNS TXT record at registration, so a
+        // sender that has already discovered Ferry keeps the old capability set until it re-resolves.
+        setToggleListener(rowForceScreenMirroring) { enabled ->
+            saveAndRestart { it.copy(forceScreenMirroring = enabled) }
         }
         setToggleListener(rowStartOnBoot)  { enabled -> save { it.copy(startOnBoot = enabled) } }
         setToggleListener(rowDebugOverlay) { enabled -> save { it.copy(showDebugOverlay = enabled) } }

@@ -61,6 +61,24 @@ data class AppSettings(
      */
     val airPlayPinAuthEnabled: Boolean = true,
 
+    /**
+     * When true, Ferry withholds the AirPlay video-URL capability bit so senders always mirror the
+     * screen instead of handing off a media URL for Ferry to play on its own.
+     *
+     * Exists because which of the two modes you get is otherwise the *sending app's* decision, made
+     * per-app and invisibly: an app playing a plain remote stream pops out into a separate player on
+     * the TV with the iPad reduced to a remote, while an app with a custom renderer or DRM it can't
+     * delegate simply mirrors. Turning this on makes the behaviour uniform.
+     *
+     * Defaults OFF, because the video-URL route is the better one when it is available — the TV
+     * fetches the stream at full source resolution instead of decoding a re-encode of the sender's
+     * screen, and the sender can lock. This trades that away for predictability.
+     *
+     * Read at receiver startup, so changing it restarts the service
+     * (see [com.ferry.receiver.airplay.AirPlayFeatures]).
+     */
+    val forceScreenMirroring: Boolean = false,
+
     // ─── Service behavior ──────────────────────────────────────────────────
     /**
      * Whether FerryService starts automatically on device boot.

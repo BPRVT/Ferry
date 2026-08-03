@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.0.0] - 2026-08-03
+
+### Added
+
+- **Always mirror the screen** (Settings → AirPlay; off by default).
+
+  AirPlay has two modes, and until now which one you got was the sending app's
+  decision, made per-app and with no visible logic to it. Play a plain remote
+  stream and the app hands the URL to Ferry, which fetches and plays it itself —
+  its own player on the TV, the iPad demoted to a remote. Play something with a
+  custom renderer, overlays, or DRM it can't delegate, and you get the whole
+  screen mirrored instead. Same TV, same app picker, two different experiences.
+
+  This setting clears the video-URL capability bit Ferry advertises, so senders
+  stop offering that route and every session arrives as mirroring.
+
+  Off by default, because the video route is the better one where it's available:
+  the TV pulls the stream at full source resolution rather than decoding a
+  re-encode of somebody's screen, and the sender can be locked and pocketed. The
+  setting trades that away for predictability, which is worth it only if the
+  inconsistency is what's bothering you.
+
+  Not offered in reverse: forcing *every* session into the video route would
+  require the sending app to have a URL to hand over, and no receiver-side
+  setting can conjure one.
+
+### Changed
+
+- **The `features` bitmask is defined once.** It was three hand-maintained copies
+  of the same literal — the mDNS TXT record, `GET /info`, and `GET /server-info`
+  — which is three chances to drift. A sender that discovers one capability set
+  and is then told a different one mid-handshake fails somewhere well away from
+  the cause. Now in `AirPlayFeatures`, with the wire format pinned by tests.
+
+### Fixed
+
+- **`TECHNICAL_SPEC.md` §8 described a bitmask Ferry doesn't advertise.** The bit
+  table claimed VideoFairPlay (bit 2) was unset and AirPlayVideoV2 (bit 26) was
+  set; the actual value has it exactly the other way round. Corrected against
+  the constant.
+
+---
+
 ## [3.1.0] - 2026-08-02
 
 ### Added
