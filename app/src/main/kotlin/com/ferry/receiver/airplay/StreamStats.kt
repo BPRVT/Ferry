@@ -56,6 +56,26 @@ object StreamStats {
     /** Of those, the expensive ones: a dropped IDR costs a full GOP of corrupt picture. */
     @Volatile var videoKeyframeDrops = 0
 
+    /**
+     * Frames that were decoded normally but deliberately not shown, because the display had not yet
+     * consumed the previous one (see `VideoDecoder.shouldRender`).
+     *
+     * Deliberately sits next to [videoDecoderDrops] in the HUD, because reading the two together is
+     * the whole point: this counter going up while that one stays flat is the fix working. A skip
+     * here costs a single invisible frame; a drop there costs every frame until the sender's next
+     * IDR. Trading the second for the first is the entire change in 6.5.0.
+     */
+    @Volatile var videoRenderSkips = 0
+
+    /**
+     * The panel's refresh rate in Hz, published by [com.ferry.receiver.ui.StreamingScreen] once its
+     * Surface exists, because that is the only place with a [android.view.Display] to ask.
+     *
+     * [com.ferry.receiver.airplay.VideoDecoder] paces rendering against this. 60 is the default
+     * rather than 0 so the pacing is sane before the real value arrives (and if it never does).
+     */
+    @Volatile var displayRefreshHz = 60f
+
     // Actual decoded video dimensions (from the SPS, so portrait phone streams are portrait here).
     // StreamingScreen reads these to aspect-fit the Surface instead of stretching to 16:9.
     @Volatile var videoWidth = 0
@@ -69,9 +89,11 @@ object StreamStats {
     /** Clears per-stream counters (call when a mirror session ends). Keeps [overlayEnabled]. */
     fun resetStreams() {
         videoRes = ""; videoFps = 0; videoQueue = 0; videoDropPct = 0
-        videoDecoderDrops = 0; videoKeyframeDrops = 0
+        videoDecoderDrops = 0; videoKeyframeDrops = 0; videoRenderSkips = 0
         videoWidth = 0; videoHeight = 0
         audioActive = false; audioQueue = 0; audioDupPct = 0
+        // displayRefreshHz is NOT reset — it is a property of the TV, not of the stream, and
+        // StreamingScreen only republishes it when a Surface is created.
     }
 
     /** Human-readable multi-line HUD text. */
@@ -79,5 +101,6 @@ object StreamStats {
         "Ferry · debug\n" +
         "VIDEO  ${videoRes.ifEmpty { "—" }}   ${videoFps} fps   q ${videoQueue}   drop ${videoDropPct}%\n" +
         "DEC    dropped ${videoDecoderDrops}   keyframes lost ${videoKeyframeDrops}\n" +
+        "SHOW   skipped ${videoRenderSkips}   panel ${displayRefreshHz.toInt()}Hz\n" +
         "AUDIO  " + (if (audioActive) "on   q ${audioQueue}   dup ${audioDupPct}%" else "off")
 }

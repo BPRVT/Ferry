@@ -112,6 +112,7 @@ class StreamingScreen @JvmOverloads constructor(
             override fun surfaceCreated(holder: SurfaceHolder) {
                 // Surface is now ready — store reference for VideoDecoder
                 surface = holder.surface
+                publishRefreshRate()
                 Logger.d("StreamingScreen: Surface created")
             }
 
@@ -127,6 +128,35 @@ class StreamingScreen @JvmOverloads constructor(
                 Logger.d("StreamingScreen: Surface destroyed")
             }
         })
+    }
+
+    /**
+     * Publishes the panel's refresh rate for [com.ferry.receiver.airplay.VideoDecoder] to pace
+     * rendering against.
+     *
+     * Read here because this is the only place in the video path holding a [android.view.Display] to
+     * ask — the decoder has a Surface and nothing else. Read at surfaceCreated rather than once at
+     * construction, so a TV that renegotiates its mode (an HDMI mode change, or a panel switching
+     * rate for 24 fps content) is picked up on the next Surface instead of staying wrong for the
+     * rest of the process.
+     *
+     * A bad reading is not dangerous: [com.ferry.receiver.airplay.VideoDecoder] clamps it.
+     */
+    private fun publishRefreshRate() {
+        val hz = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            display?.refreshRate
+        } else {
+            @Suppress("DEPRECATION")
+            (context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)
+                ?.defaultDisplay?.refreshRate
+        }
+        if (hz != null && hz > 0f) {
+            StreamStats.displayRefreshHz = hz
+            Logger.i("StreamingScreen: panel refresh rate ${hz}Hz")
+        } else {
+            Logger.w("StreamingScreen: could not read panel refresh rate — " +
+                     "pacing against ${StreamStats.displayRefreshHz}Hz")
+        }
     }
 
     /**

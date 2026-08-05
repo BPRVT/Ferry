@@ -11,6 +11,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [6.5.0] - 2026-08-05
+
+The corruption fix. 6.0.0 fixed the freezes; this fixes the smeared, blocky
+picture that came with them — a different bug, in the opposite half of the
+pipeline from where every previous attempt looked.
+
+### Fixed
+
+- **Mirroring corruption: blocky, smeared regions that persist for seconds.**
+  Ferry showed every frame it decoded, which sounds like the safe choice and is
+  the opposite.
+
+  `releaseOutputBuffer(index, true)` hands a decoded frame to the display's
+  BufferQueue, which holds about three, and the codec does not get that buffer
+  back until the display has consumed it. Show frames faster than the panel
+  refreshes and the queue saturates. A codec with no free output buffer stops
+  decoding, and a codec that has stopped decoding stops handing back **input**
+  buffers — so `decodeNalUnit` found none free and destroyed the frame.
+
+  **The jam was on the output side and the loss happened on the input side.**
+  That is why every previous attempt aimed at the wrong thing: 5.5.0 lengthened
+  the input wait, but no wait helps when the buffer cannot be freed until the
+  display releases it, and 6.0.0 capped that wait so it could not overflow the
+  queue. Both were real bugs. Neither was this one.
+
+  Ferry now shows a frame only once the previous one has had its time on screen,
+  and hands back anything earlier without showing it. The asymmetry is the whole
+  argument:
+
+  - **Not showing a decoded frame** costs one frame nobody can see. It is still
+    decoded, so it still serves as a reference for everything after it.
+  - **Not decoding a frame** breaks the reference chain, and the picture stays
+    visibly wrong until the sender's next IDR — ~10 seconds on iOS, longer on a
+    static screen.
+
+  Ferry was paying the second cost to avoid the first.
+
+  Pacing is against the panel's real refresh rate, read from the display rather
+  than assumed, so 50 Hz sets are handled correctly and a nonsense reading is
+  clamped instead of blanking the picture.
+
+  At 24 fps into a 60 Hz panel this never triggers. It triggers on bursts —
+  which is exactly when the picture was breaking.
+
+### Changed
+
+- The debug overlay gains a line: `SHOW skipped N   panel NNHz`. Reading it
+  against `DEC dropped` on the line above is the point — skips climbing while
+  drops stay flat is the trade working as intended.
+
+### Note
+
+- **How this was found.** Reported from hardware as glitching that tracked the
+  frame rate: `DEC dropped` stepping 1–4 at a time, every time an iPad mirror
+  rose from 24 fps toward ~59 on a 60 Hz TV, with decode load nowhere near the
+  limit. Two things followed from that. Bursts of 1–4 meant a codec briefly
+  *blocked*, not a codec too slow. And 1080p at 30 fps being enough to trigger it
+  ruled out decode throughput entirely — which is what pointed at the display
+  side.
+
+- **What to expect on the overlay:** `SHOW skipped` should rise during high-frame-rate
+  stretches while `DEC dropped` stays put. If `DEC dropped` still climbs, the
+  BufferQueue is not the constraint and the next suspect is mirror audio
+  competing for the same resources — turn it off and compare.
+
+---
+
 ## [6.0.0] - 2026-08-05
 
 A cleanup release, from four things reported off a Fire TV running 5.5.0. Three

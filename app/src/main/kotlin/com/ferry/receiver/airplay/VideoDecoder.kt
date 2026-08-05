@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.view.Surface
 import com.ferry.receiver.util.Logger
+import com.ferry.receiver.util.RenderPacer
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -67,6 +68,16 @@ class VideoDecoder(private val outputSurface: Surface) {
     private var callbackThread: HandlerThread? = null
 
     /**
+     * When the last frame was actually shown, for [shouldRender] to pace against.
+     *
+     * Touched only from [onOutputBufferAvailable], which MediaCodec delivers on the single
+     * [callbackThread] Looper, so it is confined to one thread and needs no synchronisation.
+     * Per-decoder rather than global on purpose: a rebuilt decoder is drawing to a new Surface and
+     * should not inherit a render deadline from the old one.
+     */
+    private var lastRenderNs = 0L
+
+    /**
      * Async-mode callbacks. The important one is [onOutputBufferAvailable]: it renders each frame
      * the moment the codec finishes it, on the codec's own thread.
      *
@@ -83,12 +94,22 @@ class VideoDecoder(private val outputSurface: Surface) {
         }
 
         override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
-            // Render immediately. We deliberately do NOT schedule a future render time for A/V sync:
-            // this Surface's BufferQueue holds only ~3 frames, so any hold quickly back-pressures the
-            // decoder → the upstream frame queue saturates → big latency + dropped (corrupt) frames.
-            // A/V alignment is handled by keeping the AUDIO path low-latency instead (AudioStreamServer).
+            // Show the frame if the display is ready for it, otherwise hand the buffer straight back
+            // without showing it. Either way the buffer is returned immediately — which is the point.
+            // See [shouldRender] for why not showing a frame is so much cheaper than not decoding one.
+            //
+            // Still no scheduled render time for A/V sync: releaseOutputBuffer(index, timestamp) makes
+            // the codec hold the buffer until that moment, which is exactly the back-pressure this is
+            // trying to avoid. A/V alignment is handled by keeping the AUDIO path low-latency instead
+            // (AudioStreamServer).
             try {
-                codec.releaseOutputBuffer(index, true)
+                val render = shouldRender()
+                codec.releaseOutputBuffer(index, render)
+                // Incremented in place rather than mirrored from a field of this decoder, so the
+                // count survives a decoder rebuild. A per-instance counter would reset to zero on
+                // every rebuild and make the HUD number jump *backwards* mid-session, which is
+                // exactly when someone is trying to read it.
+                if (!render) StreamStats.videoRenderSkips++
             } catch (e: IllegalStateException) {
                 // Raced with release() — the codec is gone. Nothing to render to.
                 Logger.v { "VideoDecoder: output buffer released after shutdown (${e.message})" }
@@ -328,6 +349,53 @@ class VideoDecoder(private val outputSurface: Surface) {
             Logger.e("Error decoding NAL unit", e)
             return false
         }
+    }
+
+    /**
+     * Whether this decoded frame should actually be shown, or handed back to the codec unshown.
+     *
+     * **This is the fix for the corruption reported against 5.5.0**, and the reasoning is worth
+     * keeping, because the old behaviour looks more correct than it is.
+     *
+     * Ferry used to show every frame it decoded. That sounds like the conservative choice, and it is
+     * the opposite, because of how a SurfaceView returns buffers. `releaseOutputBuffer(index, true)`
+     * hands the buffer to the display's BufferQueue, which holds only about three, and the codec does
+     * not get it back until the display has consumed it. Show frames faster than the panel refreshes
+     * — which is what happens when an iPad's mirror rate jumps from 24 fps to ~59 on a 60 Hz TV — and
+     * the queue saturates. A codec with no free output buffer stops decoding, and a codec that has
+     * stopped decoding stops handing back **input** buffers. [decodeNalUnit] then finds none free and
+     * destroys the frame.
+     *
+     * So the jam was on the output side and the loss happened on the input side, which is why every
+     * earlier attempt aimed at the wrong thing: 5.5.0 lengthened the input wait, but no wait helps
+     * when the buffer cannot be freed until the display releases it, and 6.0.0 capped that wait to
+     * stop it overflowing the queue. Both were real bugs. Neither was this one. Confirmed on hardware:
+     * `DEC dropped` stepping 1–4 at a time, exactly when the frame rate rose, with decode load
+     * nowhere near the limit — 1080p at 30 fps on a decoder that does this in its sleep.
+     *
+     * The asymmetry that makes the fix obvious once the mechanism is clear:
+     *
+     *  - **Not showing a decoded frame** costs one frame nobody can see. The picture is unaffected —
+     *    the frame is still decoded, so it still serves as a reference for everything after it.
+     *  - **Not decoding a frame** breaks the reference chain. Every later frame predicts from
+     *    something the decoder never had, and the picture stays visibly wrong until the sender's next
+     *    IDR — around ten seconds on iOS, and longer on a static screen.
+     *
+     * Ferry was paying the second cost to avoid the first. This pays the first instead, and returns
+     * the buffer to the codec immediately, which is what stops the input side starving at all.
+     *
+     * The rule: show a frame only once the previous shown frame has had its time on screen. Frames
+     * arriving sooner than that cannot be displayed as distinct frames anyway — the panel has not
+     * refreshed — so showing them only queues them up behind the one already there.
+     *
+     * At 24 fps into a 60 Hz panel this never triggers; frames arrive 41 ms apart against a 16.7 ms
+     * interval. At 59 fps it triggers occasionally, which is precisely the case that was breaking.
+     */
+    private fun shouldRender(): Boolean {
+        val now = System.nanoTime()
+        if (!RenderPacer.isDueToRender(now, lastRenderNs, StreamStats.displayRefreshHz)) return false
+        lastRenderNs = now
+        return true
     }
 
     /** Reads the decoder's true display size (honouring the crop rectangle) for StreamingScreen. */
