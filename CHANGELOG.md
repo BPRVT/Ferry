@@ -11,6 +11,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [6.7.0] - 2026-08-05
+
+The freeze was never a decoder problem. 6.6.0's overlay proved it in one photo.
+
+### Fixed
+
+- **A dropped mirror video connection froze the picture permanently.** The
+  reported failure, now with numbers: `in 38s`, `last 38s`, `DEC ok`,
+  `drops 4`, `qdrop 0%`, `q 2/16`. A healthy decoder that had dropped four frames
+  all session — and nothing to decode. The video stream had gone and Ferry had no
+  way to notice, report, or recover, while the iPad went on playing and the
+  session still said CONNECTED to everyone.
+
+  One line caused it. `MirrorStreamServer.runReader` set `running = false` when
+  the sender's data connection ended — but `running` also terminates the decoder
+  thread *and* the watchdog. **The event that needed reacting to killed everything
+  capable of reacting to it.** `running` now means only "this server is shutting
+  down", which is [stop]'s to say; a sender going away is recorded separately.
+
+  With the pipeline still alive, the watchdog can act: once the data connection
+  has been gone for two seconds it ends the RTSP session, so the sender stops
+  believing it is still mirroring and re-establishes properly.
+
+  Ferry deliberately does **not** try to re-accept on the same socket. The AES-CTR
+  keystream is bound to the connection that died, so a sender reconnecting to it
+  would decrypt to garbage — visibly worse than the freeze. A real recovery needs
+  a fresh SETUP with fresh keys, which is exactly what ending the session asks for.
+
+  The trigger is **the socket having actually closed**, and nothing else. The
+  obvious alternative — "no frames for N seconds" — would have been a worse bug
+  than the one being fixed: iOS sends frames only when the screen changes, so
+  every time you paused a video it would have torn down a working cast.
+
+### Changed
+
+- The overlay distinguishes "nothing is arriving" from "Ferry is slow". The
+  arrival field reads `down 38s` instead of `in 38s` once the sender's connection
+  has gone.
+
+- **Displayed frame rate decays to 0 when the stream stops.** `videoFps` is only
+  recomputed every 300 frames, so a dead stream kept showing whatever rate it had
+  last managed — a frozen picture beside a confident `31fps`. That reading is what
+  talked the 6.6.0 investigation out of the correct diagnosis once already.
+
+### Note
+
+- **On the audio numbers in that same photo:** `AUDIO on q 27 dup 39%` — the audio
+  buffer nearly full and 39% of packets arriving as duplicates or retransmits.
+  That is a Wi-Fi link working hard, and the likely reason the video stream (TCP)
+  was reset while audio (its own socket, with redundancy) limped on. Ferry's job
+  is to survive it, which is what this release does; a link that bad is still
+  worth fixing at the router.
+
+- **Two guards in this release are mutation-tested**, because both would cause
+  real damage if wrong: tearing down a paused sender's session, and firing before
+  the sender has ever connected. The first attempt at the paused-sender test
+  passed even with the guard deleted — a hole that mutation testing found and
+  reading did not.
+
+---
+
 ## [6.6.0] - 2026-08-05
 
 A frozen picture used to be permanent, and the overlay could not explain why.

@@ -77,6 +77,15 @@ object StreamStats {
     @Volatile var decoderState = ""
 
     /**
+     * Whether the sender's mirror data connection is currently open.
+     *
+     * The fact that distinguishes "Ferry is failing to show what it is being sent" from "Ferry is
+     * being sent nothing", and the HUD had no way to say it. A frozen picture with the link down is
+     * not a decoder problem at all — see `MirrorStreamServer.isStreamDead`.
+     */
+    @Volatile var videoLinkUp = false
+
+    /**
      * Frames dropped *inside* the decoder because no MediaCodec input buffer came free in time —
      * a different failure from [videoDropPct], which counts frames shed at the queue.
      *
@@ -139,7 +148,7 @@ object StreamStats {
     fun resetStreams() {
         videoRes = ""; videoFps = 0; videoQueue = 0; videoQueueCapacity = 0; videoDropPct = 0
         videoDecoderDrops = 0; videoKeyframeDrops = 0; videoRenderSkips = 0
-        videoLastArrivalMs = 0L; videoLastShownMs = 0L; videoShown = 0; decoderState = ""
+        videoLastArrivalMs = 0L; videoLastShownMs = 0L; videoShown = 0; decoderState = ""; videoLinkUp = false
         watchdogRecoveries = 0; watchdogLastReason = ""; watchdogLastMs = 0L
         videoWidth = 0; videoHeight = 0
         audioActive = false; audioQueue = 0; audioDupPct = 0
@@ -155,6 +164,14 @@ object StreamStats {
      * the difference between 0.1s and 3s is the whole diagnosis; past that the precision is noise.
      * Capped so a long-idle field cannot widen the HUD.
      */
+    /**
+     * How stale the last arrival must be before the displayed frame rate is shown as 0.
+     *
+     * Two seconds is comfortably longer than the gap between frames at any real rate, and short
+     * enough that a stopped stream reads as stopped rather than as whatever it was last managing.
+     */
+    private const val FPS_STALE_MS = 2_000L
+
     internal fun ageString(thenMs: Long, nowMs: Long = System.currentTimeMillis()): String {
         if (thenMs <= 0L) return "—"
         val ms = (nowMs - thenMs).coerceAtLeast(0L)
@@ -185,8 +202,20 @@ object StreamStats {
         val watch = if (watchdogRecoveries > 0) {
             "\nWATCH  x$watchdogRecoveries  $watchdogLastReason ${ageString(watchdogLastMs, now)} ago"
         } else ""
+
+        // "down" rather than "in" once the sender's data connection has gone, because the two mean
+        // completely different things and the HUD previously could not tell them apart: a stale "in"
+        // reads as "Ferry is slow", when the truth may be that nothing is being sent at all.
+        val arrivalLabel = if (videoLinkUp || videoLastArrivalMs <= 0L) "in" else "down"
+
+        // Displayed fps decays to 0 once arrivals go stale. The stored value is only recomputed
+        // every 300 frames, so when the stream stopped it kept displaying whatever rate was last
+        // measured — a frozen picture next to a confident "31fps", which is precisely the reading
+        // that talked me out of the right diagnosis once already.
+        val fps = if (videoLastArrivalMs > 0L && now - videoLastArrivalMs > FPS_STALE_MS) 0 else videoFps
+
         return "Ferry · debug\n" +
-            "VIDEO  ${videoRes.ifEmpty { "—" }}  ${videoFps}fps  q $queue  in ${ageString(videoLastArrivalMs, now)}\n" +
+            "VIDEO  ${videoRes.ifEmpty { "—" }}  ${fps}fps  q $queue  $arrivalLabel ${ageString(videoLastArrivalMs, now)}\n" +
             "DEC    ${decoderState.ifEmpty { "—" }}  drops $videoDecoderDrops  kf $videoKeyframeDrops  qdrop ${videoDropPct}%\n" +
             "SHOW   $videoShown  skip $videoRenderSkips  last ${ageString(videoLastShownMs, now)}  ${displayRefreshHz.toInt()}Hz\n" +
             "AUDIO  " + (if (audioActive) "on  q $audioQueue  dup ${audioDupPct}%" else "off") +

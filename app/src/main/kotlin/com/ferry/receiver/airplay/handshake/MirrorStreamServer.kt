@@ -37,6 +37,12 @@ class MirrorStreamServer(
     private val surfaceProvider: () -> Surface?,
     private val width: Int = 1920,
     private val height: Int = 1080,
+    /**
+     * Called once when the video half of the session is dead beyond recovery — see [isStreamDead].
+     * The receiver ends the RTSP session so the sender stops believing it is still mirroring and
+     * re-establishes properly, with a fresh SETUP and fresh keys.
+     */
+    private val onStreamDead: () -> Unit = {},
 ) {
     private sealed class Item
     private class Config(val sps: ByteArray, val pps: ByteArray) : Item()
@@ -108,6 +114,19 @@ class MirrorStreamServer(
 
     /** Rebuild attempts this session, for the HUD's decoder state. */
     @Volatile private var decoderRebuilds = 0
+
+    /**
+     * State of the sender's data connection. Written by the reader thread, read by the watchdog.
+     *
+     * [everConnected] distinguishes "the sender has not connected yet", where being disconnected is
+     * the normal starting state, from "the sender connected and then went away", which is a fault.
+     */
+    @Volatile private var dataConnected = false
+    @Volatile private var everConnected = false
+    @Volatile private var dataClosedAtMs = 0L
+
+    /** So the session is only declared dead once, no matter how long the watchdog keeps ticking. */
+    @Volatile private var streamDeathReported = false
     private var lastStatMs = 0L
     // Set by the reader thread when a frame is dropped under load; the decoder thread then skips
     // frames until the next keyframe (IDR) so it never decodes a reference-broken, corrupt stream.
@@ -160,6 +179,9 @@ class MirrorStreamServer(
         try {
             Logger.i("MirrorStreamServer listening on data port $dataPort")
             val socket = serverSocket.accept().also { client = it }
+            dataConnected = true
+            everConnected = true
+            StreamStats.videoLinkUp = true
             Logger.i("Mirror data connection from ${socket.inetAddress.hostAddress}")
             // Hand the kernel room to hold a burst while the decoder catches up, and don't let
             // Nagle sit on our (small, infrequent) writes back to the sender.
@@ -215,8 +237,21 @@ class MirrorStreamServer(
         } catch (e: Exception) {
             if (running) Logger.e("Mirror reader error", e)
         } finally {
-            running = false
-            Logger.i("Mirror data connection ended")
+            // NOT `running = false`. That single line is why a dropped video connection used to
+            // freeze the picture forever: it also terminated the decoder thread and the watchdog, so
+            // the one part of Ferry that could have noticed and reacted was killed by the event it
+            // needed to react to. `running` means "this server is shutting down" and only [stop]
+            // gets to say that; a sender going away is a different fact, recorded below.
+            //
+            // No second accept() either, deliberately. The AES-CTR keystream is bound to this data
+            // connection, so a sender reconnecting to the same socket would decrypt to garbage —
+            // visibly worse than the freeze. A genuine reconnect has to come through a fresh SETUP,
+            // which builds a new MirrorStreamServer with new keys, and that is what ending the
+            // session below asks the sender to do.
+            dataConnected = false
+            dataClosedAtMs = System.currentTimeMillis()
+            StreamStats.videoLinkUp = false
+            Logger.w("Mirror data connection ended — video is dead until the session is re-established")
         }
     }
 
@@ -319,6 +354,25 @@ class MirrorStreamServer(
             kotlinx.coroutines.delay(WATCHDOG_INTERVAL_MS)
             if (!running) break
             val now = System.currentTimeMillis()
+
+            // Rule 1: the video connection is gone. Rebuilding a decoder cannot help — there is
+            // nothing to decode — so end the session instead and let the sender re-establish it.
+            // This is the failure that was reported: iPad still playing, TV audio still playing,
+            // picture frozen on one frame, and Ferry still reporting CONNECTED to everyone.
+            if (Companion.isStreamDead(now, everConnected, dataConnected, dataClosedAtMs)) {
+                if (!streamDeathReported) {
+                    streamDeathReported = true
+                    StreamStats.watchdogRecoveries++
+                    StreamStats.watchdogLastReason = "video link lost"
+                    StreamStats.watchdogLastMs = now
+                    Logger.w("Watchdog: mirror data connection is gone — ending the session so the " +
+                        "sender re-establishes it")
+                    onStreamDead()
+                }
+                continue
+            }
+
+            // Rule 2: frames are arriving but none is reaching the screen — the decoder is wedged.
             if (!Companion.isStalled(now, firstArrivalMs, StreamStats.videoLastArrivalMs, StreamStats.videoLastShownMs)) {
                 continue
             }
@@ -724,6 +778,43 @@ class MirrorStreamServer(
 
         /** Watchdog tick. Slow — this is a stall detector, not a scheduler. */
         private const val WATCHDOG_INTERVAL_MS = 1_000L
+
+        /**
+         * Grace period after the data connection drops before the session is declared dead.
+         *
+         * Short, because there is nothing to wait for — no second accept() is coming (see
+         * [runReader]) — but not zero, so an orderly teardown that closes the data socket a moment
+         * before the control connection does not race into an unnecessary "session died" report.
+         */
+        private const val LINK_DEAD_GRACE_MS = 2_000L
+
+        /**
+         * Whether the video half of this session is dead beyond recovery, so the session should be
+         * ended and the sender made to re-establish it.
+         *
+         * The trigger is **the data socket having actually closed**, and nothing else. That
+         * narrowness is the whole design.
+         *
+         * The tempting alternative — "no frames have arrived for N seconds" — is unusable here, and
+         * would be a worse bug than the one being fixed. iOS sends frames only when the screen
+         * changes, so a paused video or a still menu produces no frames indefinitely while the
+         * session is perfectly healthy. A timeout on arrivals would tear down a working cast every
+         * time the user paused, which is exactly the sort of confident, wrong fix this file has
+         * collected before. A closed socket is not ambiguous: the stream is gone.
+         *
+         * @param everConnected false before the sender has ever connected, when "disconnected" is
+         *   merely the starting state and means nothing.
+         */
+        internal fun isStreamDead(
+            nowMs: Long,
+            everConnected: Boolean,
+            dataConnected: Boolean,
+            dataClosedAtMs: Long,
+        ): Boolean {
+            if (!everConnected || dataConnected) return false
+            if (dataClosedAtMs <= 0L) return false
+            return nowMs - dataClosedAtMs >= LINK_DEAD_GRACE_MS
+        }
 
         /**
          * Whether the video path looks wedged: frames arriving, nothing reaching the screen.

@@ -465,7 +465,14 @@ class AirPlayReceiver(
     private fun startMirrorStream(streamConnectionId: Long): Int {
         val aesKey = mirrorAesKey ?: run { Logger.e("mirror stream start before keys set"); return 0 }
         val ecdhSecret = mirrorEcdhSecret ?: return 0
-        return MirrorStreamServer(aesKey, ecdhSecret, streamConnectionId, videoSurfaceProvider, mirrorWidth, mirrorHeight)
+        return MirrorStreamServer(
+            aesKey, ecdhSecret, streamConnectionId, videoSurfaceProvider, mirrorWidth, mirrorHeight,
+            // The video stream died and cannot be revived in place, so end the RTSP session. Without
+            // this the sender keeps mirroring into a connection that no longer exists — the reported
+            // failure was an iPad happily playing while the TV showed one frozen frame and Ferry
+            // still said CONNECTED. Ending the session is what makes the sender re-establish.
+            onStreamDead = { rtspHandler?.endActiveSession() },
+        )
             .also { mirrorServer = it; it.start(scope); videoPlaying = true; emitNowPlaying() }
             .dataPort
             .also { Logger.i("Mirror data server started on port $it") }

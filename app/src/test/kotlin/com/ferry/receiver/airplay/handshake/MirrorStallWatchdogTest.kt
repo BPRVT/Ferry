@@ -130,4 +130,108 @@ class MirrorStallWatchdogTest {
             )
         )
     }
+
+    // ─── isStreamDead: the video connection has gone, so the session must end ─────────────────
+    //
+    // Reported from hardware on 6.6.0, with the overlay open: `in 38s`, `last 38s`, `DEC ok`,
+    // `qdrop 0%`, `q 2/16`. The decoder was healthy and had dropped four frames all session — it
+    // simply had nothing to decode, because the sender's data connection had gone and Ferry had no
+    // way to notice or recover. Meanwhile the iPad went on playing and the session still reported
+    // CONNECTED to everyone.
+
+    /** The reported failure: connected, then the socket closed and stayed closed. */
+    @Test
+    fun `a closed data connection ends the session`() {
+        assertTrue(
+            MirrorStreamServer.isStreamDead(
+                nowMs = t0 + 10_000,
+                everConnected = true,
+                dataConnected = false,
+                dataClosedAtMs = t0,
+            )
+        )
+    }
+
+    /** A live connection is never dead, however long it has been quiet. */
+    @Test
+    fun `a live data connection is never declared dead`() {
+        assertFalse(
+            MirrorStreamServer.isStreamDead(
+                nowMs = t0 + 600_000,
+                everConnected = true,
+                dataConnected = true,
+                dataClosedAtMs = 0L,
+            )
+        )
+    }
+
+    /**
+     * The case that makes the narrow trigger worth its narrowness.
+     *
+     * A paused iPad sends no frames at all, indefinitely, over a perfectly healthy connection. Had
+     * this rule keyed on "no frames for N seconds" instead of on the socket actually closing, every
+     * pause would have torn down a working cast — a far worse bug than the freeze being fixed, and
+     * the exact trap the [isStalled] rule above also had to avoid.
+     */
+    @Test
+    fun `a paused sender with a live connection is not a dead stream`() {
+        for (quietMs in listOf(10_000L, 120_000L, 3_600_000L)) {
+            assertFalse(
+                "quiet for ${quietMs}ms on a live connection is a paused sender, not a fault",
+                MirrorStreamServer.isStreamDead(
+                    nowMs = t0 + quietMs,
+                    everConnected = true,
+                    dataConnected = true,
+                    dataClosedAtMs = 0L,
+                )
+            )
+        }
+    }
+
+    /**
+     * The same rule, isolated so it actually pins the live-connection check.
+     *
+     * The test above passes even with that check deleted, because its `dataClosedAtMs = 0` is caught
+     * by a later guard — mutation testing found that hole rather than reading did. Here the close
+     * timestamp is old and non-zero, so a live connection is the *only* thing standing between this
+     * and a wrongly-declared death.
+     */
+    @Test
+    fun `a live connection outranks a stale close timestamp`() {
+        assertFalse(
+            "dataConnected must win over an old dataClosedAtMs",
+            MirrorStreamServer.isStreamDead(
+                nowMs = t0 + 600_000,
+                everConnected = true,
+                dataConnected = true,
+                dataClosedAtMs = t0,      // closed once, long ago, but currently connected
+            )
+        )
+    }
+
+    /** Before the sender has ever connected, "disconnected" is just the starting state. */
+    @Test
+    fun `never having connected is not a dead stream`() {
+        assertFalse(
+            MirrorStreamServer.isStreamDead(
+                nowMs = t0 + 600_000,
+                everConnected = false,
+                dataConnected = false,
+                dataClosedAtMs = 0L,
+            )
+        )
+    }
+
+    /** Inside the grace period, an orderly teardown must not be reported as a failure. */
+    @Test
+    fun `a just-closed connection waits out the grace period`() {
+        assertFalse(
+            MirrorStreamServer.isStreamDead(
+                nowMs = t0 + 500,
+                everConnected = true,
+                dataConnected = false,
+                dataClosedAtMs = t0,
+            )
+        )
+    }
 }

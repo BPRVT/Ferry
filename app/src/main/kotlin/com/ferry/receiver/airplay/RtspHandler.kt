@@ -149,6 +149,26 @@ open class RtspHandler(
     }
 
     /** Stops the RTSP server. */
+    /**
+     * Ends the current streaming session without stopping the receiver.
+     *
+     * Closes only the active control connection, leaving the server socket listening on port 7000,
+     * so [handleClient]'s cleanup runs (releasing media components and reporting the session ended)
+     * and the device stays discoverable for the sender to connect again.
+     *
+     * Exists for the case where the session is alive on paper but dead in practice: the mirror data
+     * connection has gone, so no video can arrive, while the sender goes on believing it is still
+     * mirroring because nothing ever told it otherwise. Ferry cannot restart that stream on its own
+     * — the AES-CTR keystream is bound to the connection that died — so the honest move is to end
+     * the session and let the sender set one up properly. See `MirrorStreamServer.isStreamDead`.
+     */
+    fun endActiveSession() {
+        val socket = activeClient ?: return
+        Logger.w("Ending the active RTSP session — the video stream is gone")
+        runCatching { socket.close() }
+            .onFailure { Logger.w("Error closing control connection (non-fatal) — ${it.message}") }
+    }
+
     fun stop() {
         running = false
         try {
