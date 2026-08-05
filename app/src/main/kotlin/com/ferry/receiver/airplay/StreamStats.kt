@@ -41,7 +41,40 @@ object StreamStats {
     @Volatile var videoRes = ""        // e.g. "1920x1080"
     @Volatile var videoFps = 0         // frames/sec over the last sample window
     @Volatile var videoQueue = 0       // current decode-queue depth
+    @Volatile var videoQueueCapacity = 0  // …out of this many, so "q 15/16" reads as nearly full
     @Volatile var videoDropPct = 0     // cumulative % of frames dropped at the queue, under load
+
+    // ─── Pipeline state, as opposed to tallies ───────────────────────────────
+    //
+    // Everything above counts events. Counters describe throughput, and are the wrong instrument for
+    // a *stall* — when the picture freezes, the interesting fact is that nothing is happening, which
+    // a tally can only express by failing to change. Diagnosing the 6.0.0 freeze meant inferring
+    // state from which numbers had stopped moving, and that produced two wrong theories before the
+    // right one. The fields below report what the pipeline is actually doing.
+
+    /**
+     * When a frame last *arrived* and when one was last *shown on screen* (epoch millis, 0 = never).
+     *
+     * Read together, these two split every freeze in one glance:
+     *  - both stale → nothing is arriving; the sender stopped or the connection died,
+     *  - arrival fresh but shown stale → frames are coming in and dying inside Ferry.
+     *
+     * That distinction took three rounds of guessing to establish by hand.
+     */
+    @Volatile var videoLastArrivalMs = 0L
+    @Volatile var videoLastShownMs = 0L
+
+    /**
+     * Frames that actually reached the screen.
+     *
+     * Ferry counted every way a frame could fail — queue drops, decoder drops, render skips — and
+     * had no count of success, so "is anything working at all?" was not a question the HUD could
+     * answer.
+     */
+    @Volatile var videoShown = 0
+
+    /** Human-readable decoder state: "ok", "none", "rebuild xN". Blank before a session starts. */
+    @Volatile var decoderState = ""
 
     /**
      * Frames dropped *inside* the decoder because no MediaCodec input buffer came free in time —
@@ -81,6 +114,22 @@ object StreamStats {
     @Volatile var videoWidth = 0
     @Volatile var videoHeight = 0
 
+    // ─── Watchdog (MirrorStreamServer) ───────────────────────────────────────
+    //
+    // Surfaced on screen rather than only logged, because the person who needs it cannot read logs:
+    // Ferry runs on a TV stick with no adb access, so anything that exists only in logcat may as
+    // well not exist. It also means a watchdog that silently saves the session still leaves
+    // evidence of what it saved it from — otherwise the fix would hide the bug it is covering.
+
+    /** How many times the watchdog has forced a recovery this session. */
+    @Volatile var watchdogRecoveries = 0
+
+    /** Why it fired last, short enough for one HUD line. Blank until it fires. */
+    @Volatile var watchdogLastReason = ""
+
+    /** When it last fired (epoch millis, 0 = never), so the HUD can show how long ago. */
+    @Volatile var watchdogLastMs = 0L
+
     // ─── Audio (AudioStreamServer) ───────────────────────────────────────────
     @Volatile var audioActive = false  // true while an audio stream is running
     @Volatile var audioQueue = 0       // current playback-queue depth
@@ -88,19 +137,59 @@ object StreamStats {
 
     /** Clears per-stream counters (call when a mirror session ends). Keeps [overlayEnabled]. */
     fun resetStreams() {
-        videoRes = ""; videoFps = 0; videoQueue = 0; videoDropPct = 0
+        videoRes = ""; videoFps = 0; videoQueue = 0; videoQueueCapacity = 0; videoDropPct = 0
         videoDecoderDrops = 0; videoKeyframeDrops = 0; videoRenderSkips = 0
+        videoLastArrivalMs = 0L; videoLastShownMs = 0L; videoShown = 0; decoderState = ""
+        watchdogRecoveries = 0; watchdogLastReason = ""; watchdogLastMs = 0L
         videoWidth = 0; videoHeight = 0
         audioActive = false; audioQueue = 0; audioDupPct = 0
         // displayRefreshHz is NOT reset — it is a property of the TV, not of the stream, and
         // StreamingScreen only republishes it when a Surface is created.
     }
 
-    /** Human-readable multi-line HUD text. */
-    fun summary(): String =
-        "Ferry · debug\n" +
-        "VIDEO  ${videoRes.ifEmpty { "—" }}   ${videoFps} fps   q ${videoQueue}   drop ${videoDropPct}%\n" +
-        "DEC    dropped ${videoDecoderDrops}   keyframes lost ${videoKeyframeDrops}\n" +
-        "SHOW   skipped ${videoRenderSkips}   panel ${displayRefreshHz.toInt()}Hz\n" +
-        "AUDIO  " + (if (audioActive) "on   q ${audioQueue}   dup ${audioDupPct}%" else "off")
+    /**
+     * How long ago [thenMs] was, as a short string: "0.4s", "12s", "—" if it never happened.
+     *
+     * Rendered as an age rather than a timestamp because the question being asked is always "is this
+     * still happening?", and an age answers it without arithmetic. Sub-10s keeps one decimal, since
+     * the difference between 0.1s and 3s is the whole diagnosis; past that the precision is noise.
+     * Capped so a long-idle field cannot widen the HUD.
+     */
+    internal fun ageString(thenMs: Long, nowMs: Long = System.currentTimeMillis()): String {
+        if (thenMs <= 0L) return "—"
+        val ms = (nowMs - thenMs).coerceAtLeast(0L)
+        return when {
+            ms < 10_000 -> "${ms / 1000}.${(ms % 1000) / 100}s"
+            ms < 100_000 -> "${ms / 1000}s"
+            else -> "99s+"
+        }
+    }
+
+    /**
+     * Human-readable multi-line HUD text.
+     *
+     * Deliberately held to the same five lines it had before the state fields were added — the
+     * overlay sits on top of live video on a TV, and the current size was reported as reading well.
+     * Anything new therefore has to earn its place by displacing a tally, not by growing the box.
+     * The one exception is WATCH, which appears only once the watchdog has actually fired.
+     *
+     * Reading it for a frozen picture:
+     *  - `in` fresh, `last` stale  → frames arriving, dying inside Ferry — look at DEC
+     *  - `in` stale, `last` stale  → nothing arriving — the sender or the connection stopped
+     *  - `DEC none` or `rebuild`   → there is no decoder to give frames to
+     *  - `q 16/16`                 → nothing is draining the queue
+     */
+    fun summary(): String {
+        val now = System.currentTimeMillis()
+        val queue = if (videoQueueCapacity > 0) "$videoQueue/$videoQueueCapacity" else "$videoQueue"
+        val watch = if (watchdogRecoveries > 0) {
+            "\nWATCH  x$watchdogRecoveries  $watchdogLastReason ${ageString(watchdogLastMs, now)} ago"
+        } else ""
+        return "Ferry · debug\n" +
+            "VIDEO  ${videoRes.ifEmpty { "—" }}  ${videoFps}fps  q $queue  in ${ageString(videoLastArrivalMs, now)}\n" +
+            "DEC    ${decoderState.ifEmpty { "—" }}  drops $videoDecoderDrops  kf $videoKeyframeDrops  qdrop ${videoDropPct}%\n" +
+            "SHOW   $videoShown  skip $videoRenderSkips  last ${ageString(videoLastShownMs, now)}  ${displayRefreshHz.toInt()}Hz\n" +
+            "AUDIO  " + (if (audioActive) "on  q $audioQueue  dup ${audioDupPct}%" else "off") +
+            watch
+    }
 }

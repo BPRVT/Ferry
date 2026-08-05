@@ -11,6 +11,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [6.6.0] - 2026-08-05
+
+A frozen picture used to be permanent, and the overlay could not explain why.
+Both fixed.
+
+### Fixed
+
+- **A frozen picture now recovers on its own.** Reported from hardware on 6.0.0:
+  the iPad kept playing, TV audio kept playing, and the video sat on a single
+  frame until the cast was stopped and restarted by hand.
+
+  Audio survives because it is a separate server on a separate socket. Video did
+  not, because **nothing in the video path was watching itself** — a decoder that
+  stopped producing simply stayed stopped, while the session went on reporting
+  CONNECTED to both the UI and the sender. There was no recovery and no signal;
+  the only way out was the remote.
+
+  A watchdog now notices when frames are arriving but none is reaching the screen,
+  and forces the decoder to rebuild. It deliberately does *not* tear the session
+  down — a rebuild is cheap and recoverable, dropping a live session on a false
+  positive is not, and the detector is new.
+
+  The condition is deliberately narrow: **frames arriving** *and* **nothing shown**.
+  Either half alone would be wrong. iOS sends frames only when something changes,
+  so a paused video or a still menu legitimately shows nothing for minutes — a
+  watchdog reading only "nothing shown lately" would rebuild a healthy decoder on
+  a timer forever. The deadline also sits above the keyframe-resync give-up, so a
+  resync that is working as designed is never aborted.
+
+### Changed
+
+- **The debug overlay reports pipeline *state*, not just tallies.** Every number
+  on it counted events, which describes throughput — and a freeze is the absence
+  of activity. Diagnosing the 6.0.0 freeze meant inferring state from which
+  counters had stopped moving, which produced two wrong theories before the right
+  one.
+
+  It now shows:
+  - `DEC ok` / `none` / `rebuild xN` — whether a decoder exists at all, which is
+    the single fact that would have ended that investigation immediately
+  - `in 0.4s` and `last 0.4s` — how long since a frame **arrived** and since one
+    reached the **screen**. Read together they split every freeze in one glance:
+    both stale means nothing is arriving (the sender or the connection stopped);
+    arrival fresh and shown stale means frames are coming in and dying inside
+    Ferry.
+  - `SHOW 5231` — frames actually displayed. Ferry counted every way a frame could
+    fail and had no count of success, so "is anything working at all?" was not a
+    question the HUD could answer.
+  - `q 1/16` rather than a bare depth, so a full queue reads as full.
+
+  Still five lines. The overlay sits on top of live video and its current size
+  reads well, so the state fields displaced tallies rather than growing the box.
+
+- **The watchdog reports itself on screen**, as a sixth line that appears only
+  once it has fired: `WATCH x2  decoder missing 12s ago`.
+
+  This is deliberate, and it is why the recovery does not simply hide the bug.
+  Ferry runs on a TV stick with no adb access, so anything that exists only in
+  logcat may as well not exist — and a watchdog that silently saves the session
+  six times a night would otherwise destroy the evidence of what it was saving it
+  from. The reason names the state it *found* ("decoder missing" vs "decoder
+  stuck"), because those are different bugs.
+
+### Note
+
+- **Reading the overlay for a frozen picture:**
+  - `in` fresh, `last` stale → frames arriving, dying inside Ferry. Look at `DEC`.
+  - `in` stale, `last` stale → nothing arriving. The sender or the connection
+    stopped; the watchdog cannot help and correctly will not try.
+  - `DEC none` or `rebuild xN` → there is no decoder to give frames to.
+  - `q 16/16` → nothing is draining the queue.
+  - `WATCH` present → it wedged and recovered. The reason is the bug worth
+    chasing, even though the picture came back.
+
+---
+
 ## [6.5.0] - 2026-08-05
 
 The corruption fix. 6.0.0 fixed the freezes; this fixes the smeared, blocky

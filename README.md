@@ -96,7 +96,7 @@ Network**.
 
 ```bash
 adb connect 192.168.1.42:5555
-adb install -r ferry-v6.5.0-firetv.apk
+adb install -r ferry-v6.6.0-firetv.apk
 ```
 
 Accept the authorization prompt on the TV the first time. Then launch **Ferry** from the
@@ -295,7 +295,7 @@ observation rather than by trusting a source review.
 | Audio boost | Off | Up to +12 dB of compressing gain for quiet sources. |
 | Keep receiving when closed | **Off** | Stay visible to senders after you leave Ferry. Off means Ferry only receives while it is open — see [Security](#security). |
 | Start on boot | Off | Launch the receiver when the TV starts. Implies "Keep receiving when closed". |
-| Debug overlay | Off | On-screen HUD: fps, queue depth, drop rate, resolution, render skips, panel refresh rate. |
+| Debug overlay | Off | On-screen HUD: pipeline state and counters — decoder status, frames shown, time since the last frame arrived and was displayed, plus any watchdog recoveries. |
 
 ---
 

@@ -93,8 +93,21 @@ class MirrorStreamServer(
     // Decoder thread only — decodeFrame and configureDecoder both run on it, so no volatile needed.
     private var skipStreakStartNs = 0L
     // Earliest time rebuildDecoder may try again, set by discardDecoder after a failure. Decoder
-    // thread only, like skipStreakStartNs.
+    // thread only, like skipStreakStartNs — except for the watchdog, which clears it under
+    // [forceRebuild]; a stale read there can only cost one extra tick.
     private var nextRebuildAllowedNs = 0L
+
+    /** Set by the watchdog, acted on by the decoder thread. See [runWatchdog]. */
+    @Volatile private var forceRebuild = false
+
+    /**
+     * When the first frame of this stream arrived, for [isStalled] to measure against when nothing
+     * has ever been shown. Written once by the reader thread.
+     */
+    @Volatile private var firstArrivalMs = 0L
+
+    /** Rebuild attempts this session, for the HUD's decoder state. */
+    @Volatile private var decoderRebuilds = 0
     private var lastStatMs = 0L
     // Set by the reader thread when a frame is dropped under load; the decoder thread then skips
     // frames until the next keyframe (IDR) so it never decodes a reference-broken, corrupt stream.
@@ -127,8 +140,11 @@ class MirrorStreamServer(
 
     fun start(scope: CoroutineScope) {
         running = true
+        StreamStats.videoQueueCapacity = QUEUE_CAPACITY
+        publishDecoderState()
         scope.launch(Dispatchers.IO) { runReader() }
         scope.launch(Dispatchers.IO) { runDecoder() }
+        scope.launch(Dispatchers.IO) { runWatchdog() }
     }
 
     fun stop() {
@@ -220,6 +236,12 @@ class MirrorStreamServer(
      */
     private fun enqueue(item: Item) {
         framesIn++
+        // Timestamp every arrival, not every 300th like the fps sample below. The watchdog and the
+        // HUD both need "is anything still coming in *right now*", which a sampled counter cannot
+        // answer — that was exactly the ambiguity that made a frozen picture hard to read.
+        val arrivedMs = System.currentTimeMillis()
+        StreamStats.videoLastArrivalMs = arrivedMs
+        if (firstArrivalMs == 0L) firstArrivalMs = arrivedMs
         if (!queue.offer(item)) {
             if (item is Frame && item.disposable) {
                 framesDropped++                    // 1: refuse the newcomer, break nothing
@@ -272,6 +294,47 @@ class MirrorStreamServer(
     private fun parseConfig(payload: ByteArray, size: Int): Config? =
         Companion.parseSpsPps(payload, size)?.let { (sps, pps) -> Config(sps, pps) }
 
+    /**
+     * Watchdog thread: notice when the picture has stopped moving, and force the video path to
+     * rebuild itself.
+     *
+     * Exists because a frozen picture used to be **permanent**. Reported from hardware on 6.0.0: the
+     * iPad kept playing, TV audio kept playing, and the video sat on one frame until the cast was
+     * stopped and restarted by hand. Audio survives because it is a separate server on a separate
+     * socket, and nothing in the video path was watching itself — a decoder that stopped producing
+     * simply stayed stopped, with the session still reporting CONNECTED to the UI and to the sender.
+     *
+     * It deliberately does not tear the session down, only rebuild the decoder. A rebuild is cheap
+     * and recoverable; dropping a live session on a false positive is not, and the detector is new.
+     * If a rebuild does not fix it, the HUD says so — which is the honest outcome, since it means
+     * the fault is somewhere this cannot reach.
+     *
+     * The recovery is requested through [forceRebuild] rather than performed here: [decoder] belongs
+     * to the decoder thread, and reaching into it from this one would race a rebuild against a
+     * decode. That is safe because none of the decoder thread's waits is unbounded, so it always
+     * comes back to check the flag.
+     */
+    private suspend fun runWatchdog() {
+        while (running) {
+            kotlinx.coroutines.delay(WATCHDOG_INTERVAL_MS)
+            if (!running) break
+            val now = System.currentTimeMillis()
+            if (!Companion.isStalled(now, firstArrivalMs, StreamStats.videoLastArrivalMs, StreamStats.videoLastShownMs)) {
+                continue
+            }
+            // Describe the state that was found, not the action taken — the point of putting this on
+            // screen is to learn what went wrong even when the recovery works and nobody sees a
+            // freeze. "decoder missing" and "decoder stuck" are different bugs.
+            val reason = if (decoder == null) "decoder missing" else "decoder stuck"
+            StreamStats.watchdogRecoveries++
+            StreamStats.watchdogLastReason = reason
+            StreamStats.watchdogLastMs = now
+            Logger.w("Watchdog: no frame shown for ${(now - maxOf(StreamStats.videoLastShownMs, firstArrivalMs))}ms " +
+                "while frames are still arriving ($reason) — forcing a decoder rebuild")
+            forceRebuild = true
+        }
+    }
+
     // ─── Decoder thread: consume the queue; the only thread that touches the decoder ──────────
     /**
      * The catch is **inside** the loop, and that placement is the whole point.
@@ -297,6 +360,16 @@ class MirrorStreamServer(
     private fun runDecoder() {
         try {
             while (running) {
+                // Honour a watchdog request before touching the queue. Clearing the backoff too is
+                // the point: the rebuild-rate limit exists to stop a failing decoder thrashing, but
+                // the watchdog only fires after seconds of a frozen picture, which is precisely the
+                // case where waiting longer is the wrong answer.
+                if (forceRebuild) {
+                    forceRebuild = false
+                    nextRebuildAllowedNs = 0L
+                    discardDecoder()
+                    nextRebuildAllowedNs = 0L
+                }
                 val item = queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
                 try {
                     when (item) {
@@ -332,6 +405,22 @@ class MirrorStreamServer(
         configuredSurface = null     // forces decodeFrame to rebuild on the next frame
         awaitingKeyframe = true      // a fresh decoder must start at an IDR
         nextRebuildAllowedNs = System.nanoTime() + REBUILD_BACKOFF_MS * 1_000_000L
+        publishDecoderState()
+    }
+
+    /**
+     * Mirrors the decoder's existence into the HUD.
+     *
+     * The single most useful fact the overlay was missing. Diagnosing the 6.0.0 freeze came down to
+     * working out whether a decoder existed at all, and that had to be inferred from which *other*
+     * counters had stopped moving — twice, wrongly. Stating it outright turns that into a glance.
+     */
+    private fun publishDecoderState() {
+        StreamStats.decoderState = when {
+            decoder != null -> "ok"
+            decoderRebuilds > 0 -> "rebuild x$decoderRebuilds"
+            else -> "none"
+        }
     }
 
     private fun configureDecoder(sps: ByteArray, pps: ByteArray) {
@@ -379,9 +468,11 @@ class MirrorStreamServer(
         val pps = lastPps ?: return
         if (surface == null) return                            // backgrounded — wait for the surface to return
         val sc = MirrorCrypto.START_CODE
+        decoderRebuilds++
         decoder = VideoDecoder(surface).also { it.initialize(sc + sps, sc + pps, width, height) }
         awaitingKeyframe = true                                // a fresh decoder must start at an IDR
         StreamStats.videoRes = "${width}x${height}"
+        publishDecoderState()
         Logger.i("Mirror decoder (re)built for surface (sps=${sps.size}B pps=${pps.size}B)")
     }
 
@@ -604,6 +695,62 @@ class MirrorStreamServer(
         internal fun waitBudgetMs(queueDepth: Int, capacity: Int = QUEUE_CAPACITY): Long {
             val headroom = capacity - queueDepth - WAIT_BUDGET_RESERVE_FRAMES
             return if (headroom <= 0) 0L else headroom * FRAME_INTERVAL_MS
+        }
+
+        /**
+         * How long the picture may sit still, while frames are still arriving, before the watchdog
+         * forces a rebuild.
+         *
+         * Must stay comfortably above [RESYNC_GIVE_UP_MS]. A keyframe resync legitimately shows
+         * nothing for up to that long — frames arrive and are deliberately skipped while waiting for
+         * an IDR — so a shorter deadline here would tear down a decoder that was recovering exactly
+         * as designed, on a schedule guaranteed to keep doing it.
+         */
+        private const val STALL_RECOVER_MS = RESYNC_GIVE_UP_MS + 2_000L
+
+        /**
+         * How recently a frame must have arrived for a stall to count as one.
+         *
+         * This is the condition that stops the watchdog firing on a **static screen**, and without it
+         * the whole mechanism would be actively harmful. iOS sends frames only when something
+         * changes, so a paused video or a still menu legitimately produces no frames and no
+         * rendering for minutes at a time. A watchdog reading only "nothing has been shown lately"
+         * would decide that healthy idling was a fault and rebuild the decoder on a timer, forever.
+         *
+         * Pairing the two conditions makes the signal specific: frames *are* coming in, and none of
+         * them is reaching the screen. That is never normal.
+         */
+        private const val STALL_ARRIVAL_FRESH_MS = 1_500L
+
+        /** Watchdog tick. Slow — this is a stall detector, not a scheduler. */
+        private const val WATCHDOG_INTERVAL_MS = 1_000L
+
+        /**
+         * Whether the video path looks wedged: frames arriving, nothing reaching the screen.
+         *
+         * A pure function of three timestamps so the policy can be unit-tested — the failure it
+         * guards against is rare, timing-dependent, and impossible to stage on a TV, which makes it
+         * exactly the kind of logic that must not be verified by reading it.
+         *
+         * @param firstArrivalMs when the first frame of this stream arrived, 0 if none yet. Needed
+         *   for the case where *nothing* has ever been shown: measuring from the last arrival cannot
+         *   detect it, because the last arrival is by definition fresh whenever this is reached.
+         * @param lastArrivalMs when a frame last arrived, 0 if never.
+         * @param lastShownMs when a frame last reached the screen, 0 if never.
+         */
+        internal fun isStalled(
+            nowMs: Long,
+            firstArrivalMs: Long,
+            lastArrivalMs: Long,
+            lastShownMs: Long,
+        ): Boolean {
+            if (lastArrivalMs <= 0L) return false                            // nothing has ever arrived
+            if (nowMs - lastArrivalMs > STALL_ARRIVAL_FRESH_MS) return false  // static screen, not a stall
+            // Measure from the last frame shown; if none ever was, from when frames started coming,
+            // so a session that never produced a picture at all is caught rather than waited on.
+            val reference = if (lastShownMs > 0L) lastShownMs else firstArrivalMs
+            if (reference <= 0L) return false
+            return nowMs - reference > STALL_RECOVER_MS
         }
 
         private const val READ_BUFFER = 256 * 1024             // > one frame, so most reads miss the OS

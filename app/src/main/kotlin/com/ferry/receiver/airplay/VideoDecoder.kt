@@ -106,10 +106,19 @@ class VideoDecoder(private val outputSurface: Surface) {
                 val render = shouldRender()
                 codec.releaseOutputBuffer(index, render)
                 // Incremented in place rather than mirrored from a field of this decoder, so the
-                // count survives a decoder rebuild. A per-instance counter would reset to zero on
-                // every rebuild and make the HUD number jump *backwards* mid-session, which is
-                // exactly when someone is trying to read it.
-                if (!render) StreamStats.videoRenderSkips++
+                // counts survive a decoder rebuild. Per-instance counters would reset to zero on
+                // every rebuild and make the HUD numbers jump *backwards* mid-session, which is
+                // exactly when someone is trying to read them.
+                if (render) {
+                    StreamStats.videoShown++
+                    // The single most diagnostic value in the HUD: the last moment anything actually
+                    // reached the screen. A frozen picture with a fresh arrival time and a stale one
+                    // here means frames are coming in and dying inside Ferry — which is the whole
+                    // question, and it used to take several rounds of guessing to answer.
+                    StreamStats.videoLastShownMs = System.currentTimeMillis()
+                } else {
+                    StreamStats.videoRenderSkips++
+                }
             } catch (e: IllegalStateException) {
                 // Raced with release() — the codec is gone. Nothing to render to.
                 Logger.v { "VideoDecoder: output buffer released after shutdown (${e.message})" }
