@@ -144,6 +144,15 @@ object StreamStats {
     @Volatile var audioQueue = 0       // current playback-queue depth
     @Volatile var audioDupPct = 0      // % of RTP packets that were redundant duplicates
 
+    /**
+     * True while the audio path is playing marginally fast to drain accumulated latency.
+     *
+     * On screen because the queue depth beside it is the thing being corrected: seeing `q` fall
+     * while this is lit is what shows the controller working, and seeing it lit constantly would
+     * mean the queue is being refilled as fast as it drains — a different problem.
+     */
+    @Volatile var audioCatchUp = false
+
     /** Clears per-stream counters (call when a mirror session ends). Keeps [overlayEnabled]. */
     fun resetStreams() {
         videoRes = ""; videoFps = 0; videoQueue = 0; videoQueueCapacity = 0; videoDropPct = 0
@@ -151,7 +160,7 @@ object StreamStats {
         videoLastArrivalMs = 0L; videoLastShownMs = 0L; videoShown = 0; decoderState = ""; videoLinkUp = false
         watchdogRecoveries = 0; watchdogLastReason = ""; watchdogLastMs = 0L
         videoWidth = 0; videoHeight = 0
-        audioActive = false; audioQueue = 0; audioDupPct = 0
+        audioActive = false; audioQueue = 0; audioDupPct = 0; audioCatchUp = false
         // displayRefreshHz is NOT reset — it is a property of the TV, not of the stream, and
         // StreamingScreen only republishes it when a Surface is created.
     }
@@ -218,7 +227,9 @@ object StreamStats {
             "VIDEO  ${videoRes.ifEmpty { "—" }}  ${fps}fps  q $queue  $arrivalLabel ${ageString(videoLastArrivalMs, now)}\n" +
             "DEC    ${decoderState.ifEmpty { "—" }}  drops $videoDecoderDrops  kf $videoKeyframeDrops  qdrop ${videoDropPct}%\n" +
             "SHOW   $videoShown  skip $videoRenderSkips  last ${ageString(videoLastShownMs, now)}  ${displayRefreshHz.toInt()}Hz\n" +
-            "AUDIO  " + (if (audioActive) "on  q $audioQueue  dup ${audioDupPct}%" else "off") +
+            "AUDIO  " + (if (audioActive) {
+                "on  q $audioQueue  dup ${audioDupPct}%" + (if (audioCatchUp) "  sync↓" else "")
+            } else "off") +
             watch
     }
 }

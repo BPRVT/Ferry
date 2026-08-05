@@ -77,6 +77,12 @@ class AudioStreamServer(
     private var audioTrack: AudioTrack? = null
     private var firstPcm = true
 
+    /**
+     * Whether the playback rate is currently nudged up to drain accumulated latency.
+     * Playback thread only — [applyLatencyCatchUp] is its sole reader and writer.
+     */
+    private var catchingUpLatency = false
+
     // Decoded-audio jitter buffer: raw (post-dedup) RTP payloads handed from the receive thread to
     // the playback thread. Bounded so a stalled player can't grow latency unboundedly — if it fills
     // we drop the oldest frame (a brief glitch is better than ever-growing audio lag).
@@ -288,6 +294,7 @@ class AudioStreamServer(
                 // Cheap no-op unless the user just changed the setting, so the boost applies to
                 // audio already playing rather than at the next session.
                 audioTrack?.let { boost.sync(it.audioSessionId, StreamStats.audioBoostDb) }
+                applyLatencyCatchUp()
                 try {
                     val decrypted = decryptPacket(payload)
                     if (alac != null) playAlacFrame(decrypted) else decodeFrame(decrypted)
@@ -396,6 +403,38 @@ class AudioStreamServer(
         runCatching { audioTrack?.setVolume(volumeGain) }
     }
 
+    /**
+     * Drains accumulated audio latency by playing marginally fast until the queue is back to target.
+     *
+     * The queue depth *is* the audio's lag behind the video, and until now it was a ratchet: bursts
+     * pushed it up, and nothing brought it down, because producer and consumer both run at real
+     * time. See [AUDIO_CATCHUP_HIGH_WATER] for why, and [AUDIO_CATCHUP_RATE] for why this speeds up
+     * rather than dropping packets.
+     *
+     * Called once per packet, but only touches the AudioTrack when the state actually changes —
+     * `setPlaybackRate` is a real call into the audio HAL and has no business running at 90 Hz.
+     */
+    private fun applyLatencyCatchUp() {
+        val track = audioTrack ?: return
+        val target = Companion.shouldCatchUp(frameQueue.size, catchingUpLatency)
+        if (target == catchingUpLatency) return
+        val rate = if (target) (sampleRate * AUDIO_CATCHUP_RATE).toInt() else sampleRate
+        // A device may refuse a rate it considers out of range. Failing to catch up is a latency
+        // problem; a thrown exception here would be a silence problem, so it is caught and the
+        // controller stays where it was rather than pretending the change took.
+        val applied = runCatching { track.playbackRate = rate }
+            .onFailure { Logger.w("Audio: playback rate $rate rejected — ${it.message}") }
+            .isSuccess
+        if (!applied) return
+        catchingUpLatency = target
+        StreamStats.audioCatchUp = target
+        Logger.i(
+            if (target) "Audio: draining ${frameQueue.size} queued packets of latency at " +
+                "${(AUDIO_CATCHUP_RATE * 100).toInt()}% speed"
+            else "Audio: latency back to target (${frameQueue.size} queued) — nominal speed"
+        )
+    }
+
     private fun initAudioTrack() {
         val channelMask = if (channels >= 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
         val minBuf = AudioTrack.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
@@ -461,6 +500,49 @@ class AudioStreamServer(
          * late video frame is invisible.
          */
         private const val AUDIO_QUEUE_CAPACITY = 32
+
+        /**
+         * Queue depth that triggers latency catch-up, and the depth it drains back to.
+         *
+         * These exist because [AUDIO_QUEUE_CAPACITY] alone cannot fix what its own comment
+         * describes. Bounding the queue stops latency growing *without limit*; it does nothing about
+         * latency that has already accumulated, and nothing ever drained it. The producer delivers
+         * at the sender's real-time rate and the consumer writes with `WRITE_BLOCKING`, which paces
+         * at the DAC's real-time rate — so **whatever depth the queue reaches, it keeps**. A burst
+         * that pushed it to 27 packets left roughly 290 ms of audio permanently behind the video,
+         * with no path back. Reported from hardware after a 6.7.0 link recovery: the queue sat near
+         * capacity and stayed there.
+         *
+         * The band is wide so the controller cannot flap: engage at 12 (~130 ms), disengage at 4
+         * (~45 ms). Steady state on a healthy stream is a packet or two — anything deep enough to
+         * reach the high-water mark is accumulated burst, not headroom being used.
+         */
+        private const val AUDIO_CATCHUP_HIGH_WATER = 12
+        private const val AUDIO_CATCHUP_TARGET = 4
+
+        /**
+         * How much faster than nominal to play while draining. 2%.
+         *
+         * Chosen to be inaudible rather than quick. Resampling shifts pitch by about 34 cents, which
+         * is imperceptible on speech and marginal on sustained musical notes, and it lasts only as
+         * long as the drain — a 290 ms backlog clears in roughly 12 seconds.
+         *
+         * The alternative, dropping packets, would clear it instantly and is what "fix the latency"
+         * usually means. It was rejected: each packet is ~10 ms of audio, so dropping a 290 ms
+         * backlog means either one large hole or a rapid series of clicks. Trading an audible defect
+         * for an inaudible one is the entire point, and A/V sync recovering over ten seconds is not
+         * something anybody notices happening.
+         */
+        private const val AUDIO_CATCHUP_RATE = 1.02
+
+        /**
+         * Whether to be draining latency right now, given the queue depth and whether we already
+         * are. Pure, so the hysteresis is unit-testable — a controller that flaps would modulate the
+         * pitch continuously, which is exactly the audible artifact this is trying to avoid.
+         */
+        internal fun shouldCatchUp(depth: Int, currentlyCatchingUp: Boolean): Boolean =
+            if (currentlyCatchingUp) depth > AUDIO_CATCHUP_TARGET
+            else depth >= AUDIO_CATCHUP_HIGH_WATER
 
         // Sliding window of recently-played RTP sequence numbers for duplicate suppression.
         // ~11 s at 92 packets/s — far longer than any retransmit gap, far shorter than the

@@ -11,6 +11,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [6.8.0] - 2026-08-05
+
+6.7.0 made the video recover. This makes the audio recover with it.
+
+### Fixed
+
+- **Audio latency never came back down.** Reported after a successful 6.7.0 link
+  recovery: the picture froze for a second, fixed itself — and the audio queue sat
+  near capacity from then on, permanently behind the video.
+
+  The jitter queue was a ratchet. The producer delivers at the sender's real-time
+  rate; the consumer writes with `WRITE_BLOCKING`, which paces at the DAC's
+  real-time rate. Both run at real time, so **whatever depth the queue reaches, it
+  keeps** — and that depth *is* how far audio lags video. A burst during the
+  recovery pushed it to 27 of 32 packets, roughly 290 ms, with no path back.
+  Bounding the queue (which is all `AUDIO_QUEUE_CAPACITY` ever did) stops latency
+  growing without limit; it does nothing about latency already accumulated.
+
+  Ferry now drains it, by playing about 2% fast until the queue is back to target.
+  A 290 ms backlog clears in roughly 12 seconds.
+
+  **Speeding up rather than dropping packets is the whole point.** Dropping would
+  clear it instantly and is the usual meaning of "fix the latency" — but each
+  packet is ~10 ms of audio, so a 290 ms backlog means one large hole or a rapid
+  series of clicks. A 2% resample shifts pitch by about 34 cents: imperceptible on
+  speech, marginal on sustained musical notes, and gone once the backlog is. Sync
+  recovering quietly over ten seconds is not something anyone notices happening,
+  which is what was asked for.
+
+  The controller has a deliberately wide band — engage at 12 packets (~130 ms),
+  disengage at 4 (~45 ms). Without that hysteresis a queue hovering near one
+  threshold would toggle the playback rate ~90 times a second, and continuous
+  pitch modulation is an audible warble. That band is mutation-tested: collapsing
+  it to a single threshold fails two tests.
+
+### Changed
+
+- The overlay shows `sync↓` on the AUDIO line while a drain is in progress.
+  Watching `q` fall beside it is what confirms the controller is working — and
+  seeing it lit constantly would mean the queue is refilling as fast as it drains,
+  which is a different problem worth knowing about.
+
+### Note
+
+- This is a general fix, not a recovery-specific one. Any burst that deepens the
+  queue — a Wi-Fi stumble, a resend storm, a codec hiccup — used to leave
+  permanent lag behind it. All of them now drain.
+
+---
+
 ## [6.7.0] - 2026-08-05
 
 The freeze was never a decoder problem. 6.6.0's overlay proved it in one photo.
