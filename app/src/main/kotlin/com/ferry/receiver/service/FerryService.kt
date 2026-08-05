@@ -15,8 +15,6 @@ import com.ferry.receiver.MainActivity
 import com.ferry.receiver.R
 import android.view.Surface
 import com.ferry.receiver.airplay.AirPlayReceiver
-import com.ferry.receiver.cast.CastReceiver
-import com.ferry.receiver.miracast.MiracastReceiver
 import com.ferry.receiver.settings.AppSettings
 import com.ferry.receiver.settings.SettingsRepository
 import com.ferry.receiver.util.Logger
@@ -90,10 +88,21 @@ class FerryService : Service() {
     // setVideoSurfaceProvider() is called after startAirPlay().
     @Volatile private var videoSurfaceProvider: (() -> Surface?)? = null
 
+    /**
+     * Whether [MainActivity] is currently on screen. Written from the Main thread by
+     * [onAppForegrounded]/[onAppBackgrounded], read from a coroutine — hence @Volatile.
+     */
+    @Volatile private var appVisible = false
+
     // Receiver instances — null when not running
     private var airPlayReceiver: AirPlayReceiver? = null
-    private var miracastReceiver: MiracastReceiver? = null
-    private var castReceiver: CastReceiver? = null
+
+    /**
+     * Miracast and Cast, behind a per-flavor seam. On the Fire TV flavor this is a no-op and
+     * neither protocol is compiled into the APK at all — see the firetv [OptionalProtocols] for why
+     * both were removed there.
+     */
+    private var optionalProtocols: OptionalProtocols? = null
 
     // Settings — read once when starting, re-read on restart
     private lateinit var settingsRepository: SettingsRepository
@@ -118,8 +127,14 @@ class FerryService : Service() {
             else           -> serviceScope.launch { startReceivers() } // default: start
         }
 
-        // START_STICKY: if the system kills the service, restart it with a null intent
-        return START_STICKY
+        // START_NOT_STICKY, deliberately. START_STICKY restarts a killed service with a *null*
+        // intent, which the branch above treats as "start everything" — so the system could
+        // silently resurrect a full receiver with no app on screen and no user action, which is
+        // precisely the invisible-advertiser behaviour 6.0.0 exists to remove. The two cases that
+        // legitimately want a receiver without an activity are covered explicitly and on purpose:
+        // AppSettings.advertiseInBackground keeps it alive when the app backgrounds, and
+        // BootReceiver brings it up after a reboot.
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -152,6 +167,48 @@ class FerryService : Service() {
         videoSurfaceProvider = provider
     }
 
+    /** Called by [MainActivity] from onStart, while bound, once the app is on screen again. */
+    fun onAppForegrounded() {
+        appVisible = true
+    }
+
+    /**
+     * Called by [MainActivity] from onStop, while still bound, when the app leaves the screen.
+     *
+     * Unless the user has opted into background receiving, this ends the session and stops the
+     * service — so Ferry stops advertising over mDNS and stops listening on port 7000 the moment
+     * it is no longer on screen. Before 6.0.0 nothing did this: the activity stopped the service
+     * only when `isFinishing`, and Fire TV's Home button never finishes the activity, so the
+     * receiver stayed up indefinitely after the user thought they had closed the app.
+     *
+     * An active stream is torn down too, rather than exempted. Stopping the receiver closes the
+     * RTSP connection, which tells the sender to stop mirroring — the alternative is a session that
+     * keeps running against a Surface that no longer exists, which is not a session anyone can see
+     * or control. It matches what backing out of the app has always done.
+     *
+     * The settings read is asynchronous, so [appVisible] is re-checked before acting: the user can
+     * return to the app inside that window, and a stop that lands after they are back would kill a
+     * receiver that is legitimately wanted.
+     */
+    fun onAppBackgrounded() {
+        appVisible = false
+        serviceScope.launch {
+            val settings = runCatching { settingsRepository.settingsFlow.first() }.getOrNull()
+                ?: AppSettings.DEFAULT
+            if (settings.receiveWhenClosed) {
+                Logger.i("App backgrounded — background receiving is on, staying up")
+                return@launch
+            }
+            if (appVisible) {
+                Logger.d("App returned before the background stop landed — staying up")
+                return@launch
+            }
+            Logger.i("App backgrounded — stopping receivers so Ferry stops advertising")
+            stopReceivers()
+            stopSelf()
+        }
+    }
+
     /**
      * Sends a DACP transport command (TV remote → AirPlay sender), e.g. play/pause or skip what the
      * Mac/iPhone is streaming. Bound Activities call this from media-key events. No-op if no AirPlay
@@ -178,14 +235,24 @@ class FerryService : Service() {
      */
     private suspend fun startReceivers() {
         val settings = settingsRepository.settingsFlow.first()
-        Logger.i("Starting receivers: AirPlay=${settings.airPlayEnabled}, Miracast=${settings.miracastEnabled}, Cast=${settings.castEnabled}")
+        Logger.i("Starting receivers: AirPlay=${settings.airPlayEnabled}, " +
+                 "optionalProtocols=${OptionalProtocols.ANY_SUPPORTED}")
 
         _serviceState.value = ServiceState.Running
         updateNotification(isRunning = true)
 
-        if (settings.airPlayEnabled)   startAirPlay(settings)
-        if (settings.miracastEnabled)  startMiracast()
-        if (settings.castEnabled)      startCast()
+        if (settings.airPlayEnabled) startAirPlay(settings)
+
+        // The receivers report their own state; nothing is assumed here. Through 5.5.0 this set
+        // ADVERTISING optimistically before either receiver had done anything, so a protocol that
+        // failed on its very first call still flashed green on the way to red.
+        optionalProtocols = OptionalProtocols(applicationContext).also {
+            it.start(
+                settings = settings,
+                onMiracastState = { state -> _miracastState.value = state },
+                onCastState = { state -> _castState.value = state },
+            )
+        }
     }
 
     /**
@@ -284,13 +351,27 @@ class FerryService : Service() {
                         _activeConnection.value =
                             ActiveConnection(pendingSenderName, Protocol.AIRPLAY)
                         updateNotification(isRunning = true, streamingSenderName = pendingSenderName)
+                        clearServiceError()
                     }
-                    ProtocolState.ADVERTISING,
-                    ProtocolState.DISABLED,
+                    ProtocolState.ADVERTISING -> {
+                        _activeConnection.value = null
+                        updateNotification(isRunning = true)
+                        clearServiceError()
+                    }
+                    ProtocolState.DISABLED    -> {
+                        _activeConnection.value = null
+                        updateNotification(isRunning = false)
+                    }
                     ProtocolState.ERROR       -> {
                         _activeConnection.value = null
-                        updateNotification(isRunning = state != ProtocolState.DISABLED &&
-                                                       state != ProtocolState.ERROR)
+                        updateNotification(isRunning = false)
+                        // ServiceState.Error has existed since the first commit, is rendered by
+                        // HomeFragment, and nothing ever set it — so a receiver that had failed
+                        // outright still showed the service badge as "running". AirPlay is the only
+                        // protocol whose failure means the service has nothing left to do, which is
+                        // what makes it the right one to surface here.
+                        _serviceState.value =
+                            ServiceState.Error(getString(R.string.service_error_airplay))
                     }
                 }
             }
@@ -298,31 +379,24 @@ class FerryService : Service() {
         Logger.d("AirPlay receiver started (displayName='${settings.effectiveDisplayName}')")
     }
 
-    private fun startMiracast() {
-        _miracastState.value = ProtocolState.ADVERTISING
-        miracastReceiver = MiracastReceiver(
-            context = applicationContext,
-            onStateChanged = { state -> _miracastState.value = state }
-        ).also { it.start() }
-        Logger.d("Miracast receiver started")
-    }
-
-    private fun startCast() {
-        _castState.value = ProtocolState.ADVERTISING
-        castReceiver = CastReceiver(
-            context = applicationContext,
-            onStateChanged = { state -> _castState.value = state }
-        ).also { it.start() }
-        Logger.d("Cast receiver started")
+    /**
+     * Returns the service badge to Running once AirPlay recovers.
+     *
+     * The counterpart to setting [ServiceState.Error], and the half that matters: mDNS registration
+     * now retries in the background, so an error genuinely does clear on its own, and a badge that
+     * could only ever go red would reproduce in miniature the sticky-error bug this release fixes.
+     */
+    private fun clearServiceError() {
+        if (_serviceState.value is ServiceState.Error) {
+            _serviceState.value = ServiceState.Running
+        }
     }
 
     private fun stopAllReceiversInternal() {
         try { airPlayReceiver?.stop() } catch (e: Exception) { Logger.e("AirPlay stop error", e) }
-        try { miracastReceiver?.stop() } catch (e: Exception) { Logger.e("Miracast stop error", e) }
-        try { castReceiver?.stop() } catch (e: Exception) { Logger.e("Cast stop error", e) }
+        try { optionalProtocols?.stop() } catch (e: Exception) { Logger.e("Optional protocol stop error", e) }
         airPlayReceiver = null
-        miracastReceiver = null
-        castReceiver = null
+        optionalProtocols = null
         _airPlayState.value = ProtocolState.DISABLED
         _miracastState.value = ProtocolState.DISABLED
         _castState.value = ProtocolState.DISABLED

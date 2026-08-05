@@ -49,7 +49,19 @@ object ServiceController {
     fun stop(context: Context) {
         Logger.i("ServiceController: stop()")
         val intent = buildIntent(context, FerryService.ACTION_STOP)
-        context.startService(intent)
+        // startService, not startForegroundService: this asks a running service to shut down, and
+        // promoting it to the foreground on the way out would be backwards.
+        //
+        // Wrapped because that call is not always legal. On API 26+ a plain startService from the
+        // background throws (IllegalStateException, and ForegroundServiceStartNotAllowedException on
+        // API 31+), and the main caller is MainActivity.onDestroy — the app is on its way out
+        // exactly when the restriction bites. If the service is not running there is nothing to
+        // stop, so swallowing this is correct rather than merely convenient.
+        try {
+            context.startService(intent)
+        } catch (e: IllegalStateException) {
+            Logger.d("ServiceController: stop() ignored — service not running (${e.message})")
+        }
     }
 
     /**

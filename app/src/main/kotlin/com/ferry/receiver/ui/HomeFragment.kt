@@ -21,6 +21,7 @@ import com.ferry.receiver.R
 import com.ferry.receiver.service.FerryService
 import com.ferry.receiver.service.Protocol
 import com.ferry.receiver.service.ProtocolState
+import com.ferry.receiver.service.OptionalProtocols
 import com.ferry.receiver.service.ServiceController
 import com.ferry.receiver.service.ServiceState
 import com.ferry.receiver.util.Logger
@@ -121,8 +122,22 @@ class HomeFragment : Fragment() {
      */
     private fun configureProtocolCards() {
         setupCard(cardAirPlay,   R.drawable.ic_airplay,  R.string.protocol_airplay)
-        setupCard(cardMiracast,  R.drawable.ic_miracast, R.string.protocol_miracast)
-        setupCard(cardCast,      R.drawable.ic_cast,     R.string.protocol_cast)
+
+        // A card for a protocol this build does not have is worse than no card: through 5.5.0 the
+        // Fire TV build showed a Cast card that could never leave "disabled" and a Miracast card
+        // that sat permanently on ERROR, neither of which the user could do anything about. Cards
+        // are shown only where the protocol actually exists.
+        cardMiracast.visibility =
+            if (OptionalProtocols.MIRACAST_SUPPORTED) View.VISIBLE else View.GONE
+        cardCast.visibility =
+            if (OptionalProtocols.CAST_SUPPORTED) View.VISIBLE else View.GONE
+
+        if (OptionalProtocols.MIRACAST_SUPPORTED) {
+            setupCard(cardMiracast, R.drawable.ic_miracast, R.string.protocol_miracast)
+        }
+        if (OptionalProtocols.CAST_SUPPORTED) {
+            setupCard(cardCast, R.drawable.ic_cast, R.string.protocol_cast)
+        }
     }
 
     private fun setupCard(card: View, iconRes: Int, nameRes: Int) {
@@ -174,11 +189,15 @@ class HomeFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             svc.airPlayState.collectLatest { state -> updateProtocolCard(cardAirPlay, state) }
         }
-        viewLifecycleOwner.lifecycleScope.launch {
-            svc.miracastState.collectLatest { state -> updateProtocolCard(cardMiracast, state) }
+        if (OptionalProtocols.MIRACAST_SUPPORTED) {
+            viewLifecycleOwner.lifecycleScope.launch {
+                svc.miracastState.collectLatest { state -> updateProtocolCard(cardMiracast, state) }
+            }
         }
-        viewLifecycleOwner.lifecycleScope.launch {
-            svc.castState.collectLatest { state -> updateProtocolCard(cardCast, state) }
+        if (OptionalProtocols.CAST_SUPPORTED) {
+            viewLifecycleOwner.lifecycleScope.launch {
+                svc.castState.collectLatest { state -> updateProtocolCard(cardCast, state) }
+            }
         }
     }
 

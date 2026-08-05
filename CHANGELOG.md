@@ -11,6 +11,156 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [6.0.0] - 2026-08-05
+
+A cleanup release, from four things reported off a Fire TV running 5.5.0. Three
+of the four turned out not to be the bug they looked like from the couch.
+
+### Fixed
+
+- **The freeze cascade — mirroring lagging, glitching, and hanging for seconds at
+  a time.** A regression introduced by 5.5.0's own change, and the reason this
+  release exists.
+
+  5.5.0 raised the wait for a free decoder input slot from 4 ms to 16 ms, and
+  5.0.1 had already given keyframes 100 ms. Both waits block
+  `MirrorStreamServer`'s decoder thread — which is the *only* thread draining the
+  16-frame queue. So while it waited, the reader kept enqueuing and nothing was
+  removed. Long enough, and the queue overflowed; the drop policy then had to
+  shed a referenced frame, which armed a keyframe resync, which stopped the
+  picture for up to three seconds.
+
+  The keyframe case was worse and self-sustaining. A 100 ms block is about six
+  frames of reader output, so the overflow landed *during the IDR's own decode
+  call*. The guard added in 5.0.2 then correctly refused to let that IDR clear
+  the resync — meaning **the keyframe wait caused the overflow that invalidated
+  the keyframe it was waiting for**. Three seconds frozen, a moment of motion,
+  three seconds frozen. Which reads as a TV that has locked up.
+
+  5.5.0's reasoning — "with one frame queued, the extra 12 ms delays nothing
+  behind it" — was correct at queue depth 1, and nothing whatsoever held the
+  depth there. That guard now exists: the wait is capped by
+  `MirrorStreamServer.waitBudgetMs`, derived from how much queue headroom is
+  actually left. Empty queue, full 100 ms as intended. Queue nearly full, no wait
+  at all, because at that depth there is nothing left to spend.
+
+  Worth naming plainly: each individual piece of this — the 16 ms wait, the
+  100 ms keyframe wait, the arming guard, the 3-second give-up — was a correct
+  fix for the bug in front of it across 5.0.0–5.5.0. The loop only existed in
+  their combination.
+
+- **One codec hiccup froze the picture for the rest of the session.**
+  `MirrorStreamServer.runDecoder`'s exception handler sat *outside* its loop, and
+  `VideoDecoder.initialize` can throw unchecked for transient reasons — another
+  app holding the hardware decoder, a surface torn down mid-configure. A single
+  throw exited the loop for good, while the reader kept filling a queue nobody
+  drained. Every frame dropped, picture frozen, no way back short of the sender
+  reconnecting.
+
+  The handler is now inside the loop; the decoder is rebuilt from the cached
+  SPS/PPS, rate-limited to one attempt per second. The "decoder unhealthy" path
+  no longer clears the cached parameter sets either — it used to wait for the
+  sender to volunteer a fresh config packet, which it is under no obligation to
+  send.
+
+  `VideoDecoder.initialize` also leaked a `HandlerThread` on every failure,
+  because the half-built decoder was discarded without `release()` ever running.
+
+- **The error that stuck after manually stopping a cast — while casting kept
+  working.** That last part was the clue.
+
+  `AirPlayReceiver.onStreamingStopped` restarted mDNS at the end of *every*
+  session. Nothing had ever unregistered it — the registration survives a session
+  untouched — so the restart re-advertised something that was never withdrawn,
+  and raced an asynchronous `unregisterService` against an immediate
+  re-registration of the same two names. When one of the two lost that race,
+  `MdnsService` emitted ERROR and had no way back: it emitted ADVERTISING only
+  when a counter reached 2, and that counter only ever counted up. Meanwhile the
+  RTSP server on port 7000 is entirely independent of mDNS and carried on
+  listening, and senders cache the record. Hence: permanent error on screen,
+  casting still fine.
+
+  The needless restart is gone. Registration state is now tracked per service and
+  recomputed rather than tallied, so it is reversible; failures clear the listener
+  (which used to leak one per cycle), retry with backoff, and recover to
+  ADVERTISING when they succeed.
+
+### Changed
+
+- **Ferry no longer advertises itself while the app is closed.** Reported as a
+  safety concern, and it was a real one.
+
+  `MainActivity` stopped the service only when `isFinishing`, and Fire TV's Home
+  button produces `onStop` without ever finishing the activity — so Ferry kept
+  announcing itself over mDNS and listening on port 7000 indefinitely after the
+  user believed they had closed it. With PIN pairing off by default, that left an
+  invisible, unauthenticated receiver on the LAN: anything that could reach the
+  subnet could put video and audio on the TV, with nothing on screen to suggest
+  Ferry was still listening.
+
+  Receiving is now scoped to the app being open. **Settings → Keep receiving when
+  closed** restores the old behaviour deliberately; "Start on boot" implies it.
+
+  `START_STICKY` is now `START_NOT_STICKY` for the same reason — it restarted a
+  killed service with a null intent, which the service treated as "start
+  everything", silently resurrecting a receiver with no app on screen and no user
+  action.
+
+- **Miracast and Cast are gone from the Fire TV build.** Neither ever worked
+  there, and both were enabled by default.
+
+  Cast *cannot* work: Fire TV has no Google Play Services, so the receiver was a
+  no-op stub that reported DISABLED — while still showing a toggle and a card
+  that could never do anything. Miracast was worse than inert: it gated on
+  `ACCESS_FINE_LOCATION` / `NEARBY_WIFI_DEVICES`, and Ferry never requested
+  either at runtime (only `POST_NOTIFICATIONS`), so the check failed on every Fire
+  TV on every boot and the receiver emitted ERROR without ever advertising or
+  opening port 7236. A permanent red card for a protocol that never ran.
+
+  The Fire TV APK now contains no Miracast or Cast code at all, and drops
+  `CHANGE_WIFI_STATE`, both capped location permissions, and
+  `NEARBY_WIFI_DEVICES` — permissions the app asked for and could not use.
+
+  **The Google TV flavor is unchanged**, including its real Cast Connect
+  implementation. Both protocols live behind a per-flavor `OptionalProtocols`
+  seam.
+
+- Protocol cards no longer flash green before going red: `ADVERTISING` was set
+  optimistically before either optional receiver had done anything.
+
+- `ServiceState.Error` has existed since the first commit, is rendered by the
+  home screen, and nothing ever set it — so a receiver that had failed outright
+  still showed the service badge as "running". It is now set when AirPlay fails,
+  and cleared when it recovers.
+
+- `ServiceController.stop()` could throw. It used `startService`, which is
+  illegal from the background on API 26+ — and its main caller is
+  `MainActivity.onDestroy`, where the restriction is most likely to apply.
+
+### Note
+
+- **`mirrorAudioEnabled`'s documentation contradicted its value, and had since
+  the first commit.** The comment said "defaults OFF to keep video mirroring
+  rock-solid"; the value beside it was `true` in every shipped build. Corrected
+  to match the code rather than the other way round — mirror audio has been on
+  throughout, and the audio work built on top of it (per-path volume in 3.1.0,
+  the compressing boost in 3.1.0) was all exercised against it.
+
+  The warning it carried is kept, because it describes a real failure mode rather
+  than a default: macOS drives mirroring audio with realtime RTCP clock-sync that
+  Ferry does not fully implement, and a sender that gives up on it can tear down
+  the whole mirror session, video included. **If a Mac connects then drops
+  repeatedly, turn mirror audio off and see whether video alone is stable** —
+  that is the single most useful thing to know when diagnosing it.
+
+- **How to tell whether the freeze fix worked:** the multi-second freezes should
+  be gone outright. With the debug overlay on, `keyframeWaits` is the number to
+  watch — each one was a resync that stopped the picture for up to three seconds.
+  If freezes persist while `keyframeWaits` stays near zero, the cause is
+  elsewhere and the next suspect is mirror audio, per the note above.
+
+---
+
 ## [5.5.0] - 2026-08-03
 
 ### Changed

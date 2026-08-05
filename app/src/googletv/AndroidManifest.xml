@@ -1,11 +1,53 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        Miracast (Wi-Fi Direct / Wi-Fi P2P). Declared here rather than in the main manifest as of
+        6.0.0: these permissions exist only for Miracast, and Miracast is not part of the Fire TV
+        build (see src/firetv/kotlin/.../OptionalProtocols.kt).
+
+        The location permissions are capped at API 32. Android 13 introduced NEARBY_WIFI_DEVICES
+        precisely so an app that scans for nearby devices no longer has to hold a location
+        permission it does not want; on 33+ that permission alone covers Wi-Fi P2P discovery.
+        Without the cap, Ferry keeps asking for fine location on every modern device and the user
+        has to take on trust that it is unused. maxSdkVersion turns that into something the manifest
+        states outright.
+
+        neverForLocation is the matching assertion for NEARBY_WIFI_DEVICES: Ferry does not derive
+        location from Wi-Fi scan results. There is no LocationManager, no location provider, and no
+        geocoding anywhere in the tree (see AUDIT.md).
+    -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission
+        android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+    <!--
+        UnusedAttribute: usesPermissionFlags is API 31+, and minSdk here is 29. That is the point —
+        older platforms ignore it, and the permission it qualifies does not exist before API 33
+        anyway. Suppressed rather than dropped, because dropping it would mean asserting nothing
+        about location on exactly the platforms where the assertion is meaningful.
+    -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:ignore="UnusedAttribute" />
+
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
     <uses-feature
         android:name="android.software.leanback"
         android:required="true" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.network"
+        android:required="false" />
 
     <application
         android:banner="@drawable/app_banner"

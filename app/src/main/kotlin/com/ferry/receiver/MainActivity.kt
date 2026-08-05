@@ -85,6 +85,10 @@ class MainActivity : AppCompatActivity() {
             // Wire the streaming Surface so the service can pass it to VideoDecoder
             service?.setVideoSurfaceProvider { getVideoSurface() }
 
+            // Tell the service the app is on screen. It uses this to decide whether it may keep
+            // advertising once we background — see FerryService.onAppBackgrounded.
+            service?.onAppForegrounded()
+
             // Show/hide the full-screen overlay for video streams and photos.
             observeOverlayState()
         }
@@ -113,15 +117,17 @@ class MainActivity : AppCompatActivity() {
             navigateTo(HomeFragment(), navItemHome)
         }
 
-        // Start the service immediately so it's running before any sender discovers us
-        ServiceController.start(this)
-
         // Android 13+ requires an explicit runtime grant for POST_NOTIFICATIONS
         requestNotificationPermission()
     }
 
     override fun onStart() {
         super.onStart()
+        // Start the service here rather than in onCreate. The receiver's lifetime is now tied to
+        // the app being on screen (see onStop), so it has to come back every time we do — not only
+        // on the launch that created this Activity.
+        ServiceController.start(this)
+
         // Bind so we can observe StateFlows and supply the video Surface
         val intent = Intent(this, FerryService::class.java)
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
@@ -131,6 +137,19 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
         // Clear surface reference before unbinding to avoid holding a dead Surface
         service?.setVideoSurfaceProvider { null }
+
+        // Tell the service we are off screen BEFORE unbinding — after the unbind we have no
+        // reference to tell. It decides whether to keep advertising; see
+        // FerryService.onAppBackgrounded and AppSettings.advertiseInBackground.
+        //
+        // isChangingConfigurations excludes the case where the system is about to recreate this
+        // Activity immediately (a locale or ui-mode change; the common orientation/size changes are
+        // already absorbed by android:configChanges). Treating that as "the user left" would tear
+        // down a live session to rebuild it a moment later.
+        if (!isChangingConfigurations) {
+            service?.onAppBackgrounded()
+        }
+
         if (isBound) {
             unbindService(serviceConnection)
             isBound = false
@@ -138,18 +157,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         // A user-initiated exit (Back out of the app) should end any active mirror — closing the
         // service stops the receiver, which drops the RTSP connection so the sender stops mirroring
         // too. isFinishing distinguishes a real exit from a config-change recreation (where the
-        // service must keep running). Backgrounding via Home goes through onStop only (no destroy),
-        // so the receiver keeps advertising for a quick return.
+        // service must keep running).
+        //
+        // Backgrounding via Home does NOT reach here — Fire TV's Home button produces onStop with
+        // no destroy, which is exactly how the receiver used to stay up indefinitely after the user
+        // thought they had closed Ferry. That case is handled in onStop now; this remains for the
+        // ordinary Back-out exit, which still needs to work when background receiving is enabled.
         if (isFinishing) {
             Timber.d("MainActivity finishing — stopping service so mirroring doesn't linger")
             ServiceController.stop(this)
         } else {
             Timber.d("MainActivity destroyed (recreation) — leaving service running")
         }
+        // Last, so the work above still runs against a live Activity.
+        super.onDestroy()
     }
 
     // ─── View Setup ──────────────────────────────────────────────────────────

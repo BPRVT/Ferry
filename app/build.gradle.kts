@@ -28,8 +28,8 @@ android {
         // applicationId is overridden per flavor below
         minSdk = 25           // Lowest common denominator (Fire TV)
         targetSdk = 35
-        versionCode = 18
-        versionName = "5.5.0"
+        versionCode = 19
+        versionName = "6.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "CAST_APP_ID", "\"${castAppId.escapedForBuildConfig()}\"")
@@ -137,6 +137,12 @@ android {
         }
         getByName("test") {
             kotlin.srcDirs("src/test/kotlin")
+        }
+        // Tests for the protocols that only exist on Google TV. They live outside src/test because
+        // src/test is compiled against *every* variant, and MiracastReceiver / CastReceiver are no
+        // longer part of the firetv source set at all — see src/firetv/.../OptionalProtocols.kt.
+        getByName("testGoogletv") {
+            kotlin.srcDirs("src/testGoogletv/kotlin")
         }
         getByName("androidTest") {
             kotlin.srcDirs("src/androidTest/kotlin")

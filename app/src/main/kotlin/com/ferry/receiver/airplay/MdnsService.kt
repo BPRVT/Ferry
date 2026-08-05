@@ -6,6 +6,13 @@ import android.net.nsd.NsdServiceInfo
 import com.ferry.receiver.service.ProtocolState
 import com.ferry.receiver.util.Logger
 import com.ferry.receiver.util.NetworkUtils
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * MdnsService — Advertises Ferry as an AirPlay 2 receiver on the local network.
@@ -65,10 +72,27 @@ class MdnsService(
     private var airPlayListener: NsdManager.RegistrationListener? = null
     private var raopListener: NsdManager.RegistrationListener? = null
 
-    // Count of how many services have confirmed registration.
-    // Only when both reach 2 do we emit ProtocolState.ADVERTISING.
-    @Volatile
-    private var registeredCount = 0
+    /**
+     * Whether each of the two required services is currently registered.
+     *
+     * These replace a single `registeredCount` that only ever counted *up*. AirPlay needs both
+     * `_airplay._tcp` and `_raop._tcp`, and ADVERTISING was emitted when the counter reached 2 — so
+     * if one registration failed, the counter stopped at 1 and the protocol card stayed ERROR for
+     * the rest of the process lifetime, with no path back even after a successful retry. Tracking
+     * the two services separately means the state can be *recomputed* from what is actually
+     * registered (see [publishState]) rather than inferred from a tally that cannot go down.
+     */
+    @Volatile private var airPlayRegistered = false
+    @Volatile private var raopRegistered = false
+
+    /** True once a registration has failed and the retry has not yet succeeded — drives ERROR. */
+    @Volatile private var registrationFailed = false
+
+    // Retry scheduling. mDNS registration failures are usually transient (the system daemon is
+    // busy, or a previous unregister has not landed yet), so they are retried rather than fatal.
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var retryJob: Job? = null
+    @Volatile private var retryAttempt = 0
 
     // Guard against double-start
     @Volatile
@@ -96,7 +120,10 @@ class MdnsService(
             return
         }
         isStarted = true
-        registeredCount = 0
+        airPlayRegistered = false
+        raopRegistered = false
+        registrationFailed = false
+        retryAttempt = 0
 
         val effectiveName = resolveDisplayName(displayNameOverride)
         Logger.i("Starting mDNS advertising as '$effectiveName'")
@@ -116,6 +143,10 @@ class MdnsService(
      */
     fun stop() {
         Logger.i("Stopping mDNS advertising")
+        // Before the unregisters, so an in-flight retry cannot re-register behind our back.
+        isStarted = false
+        retryJob?.cancel()
+        retryJob = null
         try {
             airPlayListener?.let { nsdManager.unregisterService(it) }
             raopListener?.let { nsdManager.unregisterService(it) }
@@ -125,10 +156,18 @@ class MdnsService(
         } finally {
             airPlayListener = null
             raopListener = null
-            registeredCount = 0
-            isStarted = false
+            airPlayRegistered = false
+            raopRegistered = false
+            registrationFailed = false
+            retryAttempt = 0
             onStateChange(ProtocolState.DISABLED)
         }
+    }
+
+    /** Releases the retry scope. After this the instance is dead; build a new one to advertise again. */
+    fun release() {
+        stop()
+        scope.cancel()
     }
 
     /**
@@ -136,6 +175,12 @@ class MdnsService(
      *
      * Used after a streaming session ends to immediately re-advertise the device
      * in sender pickers.
+     *
+     * NOT for use at the end of a streaming session. Nothing unregisters mDNS while a session is
+     * running, so re-registering afterwards advertises something that was never withdrawn — and the
+     * stop→start pair races an asynchronous `unregisterService` against a registration of the same
+     * names. Through 5.5.0 `AirPlayReceiver.onStreamingStopped` did exactly that on every session
+     * end, and it is what turned an ordinary "stop casting" into a permanent ERROR card.
      *
      * @param displayNameOverride Updated display name, if changed in Settings.
      */
@@ -198,8 +243,8 @@ class MdnsService(
                 }
                 onActualNameRegistered(actualName)
             },
-            onSuccess = { incrementAndCheckBothRegistered() },
-            onFailure = { onStateChange(ProtocolState.ERROR) }
+            onSuccess = { airPlayRegistered = true; publishState() },
+            onFailure = { airPlayRegistered = false; airPlayListener = null; onRegistrationFailure("_airplay._tcp") }
         )
         nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, airPlayListener!!)
     }
@@ -238,22 +283,82 @@ class MdnsService(
         raopListener = createRegistrationListener(
             serviceLabel = "_raop._tcp",
             onRegisteredName = null,  // RAOP name has MAC prefix — not shown to users
-            onSuccess = { incrementAndCheckBothRegistered() },
-            onFailure = { onStateChange(ProtocolState.ERROR) }
+            onSuccess = { raopRegistered = true; publishState() },
+            onFailure = { raopRegistered = false; raopListener = null; onRegistrationFailure("_raop._tcp") }
         )
         nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, raopListener!!)
     }
 
     /**
-     * Emits [ProtocolState.ADVERTISING] only after both services have confirmed registration.
-     * This prevents a brief "advertising" state where only one of the two required services
-     * is live.
+     * Recomputes and emits the protocol state from what is actually registered right now.
+     *
+     * [ProtocolState.ADVERTISING] requires *both* services — a brief state where only one of the two
+     * is live would mean senders can see Ferry but not connect to it. ERROR is emitted while a
+     * registration has failed and its retry has not yet landed.
+     *
+     * The important property is that this is a pure function of current state and therefore
+     * reversible. Its predecessor incremented a counter and emitted ADVERTISING at 2, which meant a
+     * single failed registration was unrecoverable for the life of the process.
      */
     @Synchronized
-    private fun incrementAndCheckBothRegistered() {
-        registeredCount++
-        if (registeredCount >= 2) {
-            onStateChange(ProtocolState.ADVERTISING)
+    private fun publishState() {
+        if (!isStarted) return
+        when {
+            airPlayRegistered && raopRegistered -> {
+                if (registrationFailed) {
+                    Logger.i("mDNS recovered — both services registered")
+                    registrationFailed = false
+                }
+                onStateChange(ProtocolState.ADVERTISING)
+            }
+            registrationFailed -> onStateChange(ProtocolState.ERROR)
+            // else: registration still in flight — say nothing rather than flicker the card.
+        }
+    }
+
+    /**
+     * Records a failed registration and schedules a retry.
+     *
+     * Retried rather than treated as terminal because the usual causes are transient: the system
+     * mDNS daemon is momentarily busy, or a previous `unregisterService` for the same name has not
+     * landed yet. The listener is cleared first — the old code left it set, so the next `start()`
+     * overwrote the field and leaked an NsdManager listener per cycle.
+     */
+    @Synchronized
+    private fun onRegistrationFailure(serviceLabel: String) {
+        if (!isStarted) return
+        registrationFailed = true
+        publishState()
+
+        if (retryJob?.isActive == true) return          // a retry is already pending
+        val attempt = retryAttempt++
+        val delayMs = (RETRY_BASE_DELAY_MS shl attempt.coerceAtMost(RETRY_MAX_SHIFT))
+            .coerceAtMost(RETRY_MAX_DELAY_MS)
+        Logger.w("mDNS $serviceLabel failed — retrying in ${delayMs}ms (attempt ${attempt + 1})")
+
+        retryJob = scope.launch {
+            delay(delayMs)
+            retryMissingServices()
+        }
+    }
+
+    /**
+     * Re-registers whichever of the two services is not currently up.
+     *
+     * Only the missing ones: re-registering a service that is already live would either fail with
+     * FAILURE_ALREADY_ACTIVE or, worse, leave a second listener attached to it.
+     */
+    @Synchronized
+    private fun retryMissingServices() {
+        if (!isStarted) return
+        val name = requestedName
+        if (!airPlayRegistered && airPlayListener == null) {
+            Logger.i("mDNS retry: re-registering _airplay._tcp as '$name'")
+            registerAirPlayService(name)
+        }
+        if (!raopRegistered && raopListener == null) {
+            Logger.i("mDNS retry: re-registering _raop._tcp as '$name'")
+            registerRaopService(name)
         }
     }
 
@@ -291,8 +396,12 @@ class MdnsService(
                     Logger.w("mDNS $serviceLabel already active — treating as success")
                     onSuccess()
                 } else {
+                    // NOT `isStarted = false` any more. That was the old code's way of saying
+                    // "we are no longer advertising", but isStarted is the *guard against
+                    // double-start*, and clearing it here left the object claiming to be stopped
+                    // while its listeners were still registered — so the next start() re-registered
+                    // over the top of them. Failure is recorded and retried instead.
                     Logger.e("mDNS registration FAILED for $serviceLabel, errorCode=$errorCode")
-                    isStarted = false
                     onFailure()
                 }
             }
@@ -323,5 +432,20 @@ class MdnsService(
 
         /** AirPlay server version — matches a real Apple TV for maximum compatibility. */
         private const val AIRPLAY_SERVER_VERSION = "220.68"
+
+        /**
+         * Backoff for retrying a failed mDNS registration: 1s, 2s, 4s … capped at
+         * [RETRY_MAX_DELAY_MS].
+         *
+         * Retries never give up. Advertising is the entire point of the receiver — a Ferry that has
+         * silently stopped announcing itself is indistinguishable from a broken one, and the
+         * failures being retried here (a busy system mDNS daemon, an unregister that has not landed)
+         * clear on their own. The cap keeps a permanently unhappy daemon down to one attempt every
+         * 30 seconds rather than a spin.
+         */
+        private const val RETRY_BASE_DELAY_MS = 1_000L
+        private const val RETRY_MAX_DELAY_MS = 30_000L
+        /** Bounds the shift so `RETRY_BASE_DELAY_MS shl attempt` cannot overflow. */
+        private const val RETRY_MAX_SHIFT = 5
     }
 }

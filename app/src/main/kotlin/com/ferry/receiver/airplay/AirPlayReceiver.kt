@@ -178,7 +178,9 @@ class AirPlayReceiver(
         try {
             rtspHandler?.stop()
             timingHandler?.stop()
-            mdnsService?.stop()
+            // release(), not stop(): this receiver is being discarded, so MdnsService's retry
+            // scope has to go with it or a pending re-registration outlives the session.
+            mdnsService?.release()
             dacpClient.stop()
             releaseMediaComponents()
         } catch (e: Exception) {
@@ -300,21 +302,21 @@ class AirPlayReceiver(
     /**
      * Called when streaming ends (TEARDOWN received or socket closed).
      *
-     * Releases media components and re-advertises so the device reappears
-     * in sender pickers immediately.
+     * Releases the media components and reports that we are advertising again.
+     *
+     * It does NOT restart mDNS, and that removal is the fix for the error that stuck after
+     * manually stopping a cast. Nothing unregisters mDNS while a session runs — the registration
+     * survives the whole session untouched — so the restart re-advertised something that had never
+     * been withdrawn. What it did accomplish was to race an asynchronous `unregisterService`
+     * against an immediate re-registration of the same two names; when one of the two lost that
+     * race, [MdnsService] emitted ERROR and (before the rewrite there) had no way back, while
+     * [RtspHandler] on port 7000 carried on listening completely independently. Hence the exact
+     * symptom reported: a permanent error on screen, and casting that still works.
      */
     private fun onStreamingStopped() {
         Logger.i("Streaming stopped — releasing media components")
         releaseMediaComponents()
         emitState(ProtocolState.ADVERTISING)
-
-        scope.launch {
-            try {
-                mdnsService?.restart(displayName.ifBlank { null })
-            } catch (e: Exception) {
-                Logger.e("Failed to restart mDNS after streaming", e)
-            }
-        }
     }
 
     // ─── Private: media pipeline ──────────────────────────────────────────────

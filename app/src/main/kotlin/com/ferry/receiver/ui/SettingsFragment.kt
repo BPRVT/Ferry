@@ -2,6 +2,7 @@ package com.ferry.receiver.ui
 
 import android.app.AlertDialog
 import android.os.Bundle
+import com.ferry.receiver.service.OptionalProtocols
 import com.ferry.receiver.service.ServiceController
 import android.text.InputFilter
 import android.text.InputType
@@ -62,6 +63,7 @@ class SettingsFragment : Fragment() {
     private lateinit var rowSmartFill: View
     private lateinit var rowAudioBoost: LinearLayout
     private lateinit var textAudioBoostValue: TextView
+    private lateinit var rowAdvertiseInBackground: View
     private lateinit var rowStartOnBoot: View
     private lateinit var rowDebugOverlay: View
     private lateinit var rowForceHighRes: View
@@ -104,6 +106,7 @@ class SettingsFragment : Fragment() {
         rowSmartFill        = view.findViewById(R.id.row_smart_fill)
         rowAudioBoost       = view.findViewById(R.id.row_audio_boost)
         textAudioBoostValue = view.findViewById(R.id.text_audio_boost_value)
+        rowAdvertiseInBackground = view.findViewById(R.id.row_advertise_in_background)
         rowStartOnBoot      = view.findViewById(R.id.row_start_on_boot)
         rowDebugOverlay     = view.findViewById(R.id.row_debug_overlay)
         rowForceHighRes     = view.findViewById(R.id.row_force_high_res)
@@ -124,14 +127,29 @@ class SettingsFragment : Fragment() {
     /** Sets all row labels and subtitles from string resources. */
     private fun setRowLabels() {
         configureToggleRow(rowAirPlay,      R.string.setting_airplay_enabled,    R.string.setting_airplay_subtitle)
-        configureToggleRow(rowMiracast,     R.string.setting_miracast_enabled,   R.string.setting_miracast_subtitle)
-        configureToggleRow(rowCast,         R.string.setting_cast_enabled,       R.string.setting_cast_subtitle)
+
+        // Only offer a protocol this build can actually run. On Fire TV neither Miracast nor Cast
+        // is compiled in (see the firetv OptionalProtocols), so these toggles would have been
+        // switches that changed a stored flag and nothing else.
+        rowMiracast.visibility =
+            if (OptionalProtocols.MIRACAST_SUPPORTED) View.VISIBLE else View.GONE
+        rowCast.visibility =
+            if (OptionalProtocols.CAST_SUPPORTED) View.VISIBLE else View.GONE
+        if (OptionalProtocols.MIRACAST_SUPPORTED) {
+            configureToggleRow(rowMiracast, R.string.setting_miracast_enabled, R.string.setting_miracast_subtitle)
+        }
+        if (OptionalProtocols.CAST_SUPPORTED) {
+            configureToggleRow(rowCast, R.string.setting_cast_enabled, R.string.setting_cast_subtitle)
+        }
         configureToggleRow(rowMirrorAudio,  R.string.setting_mirror_audio,       R.string.setting_mirror_audio_subtitle)
         configureToggleRow(rowPinAuth,      R.string.setting_pin_auth,           R.string.setting_pin_auth_subtitle)
         configureToggleRow(rowForceScreenMirroring,
             R.string.setting_force_screen_mirroring, R.string.setting_force_screen_mirroring_subtitle)
         configureToggleRow(rowSmartFill,    R.string.setting_smart_fill,         R.string.setting_smart_fill_subtitle)
-        configureToggleRow(rowStartOnBoot,  R.string.setting_start_on_boot,      0)
+        configureToggleRow(rowAdvertiseInBackground,
+            R.string.setting_advertise_in_background, R.string.setting_advertise_in_background_subtitle)
+        configureToggleRow(rowStartOnBoot,  R.string.setting_start_on_boot,
+            R.string.setting_start_on_boot_subtitle)
         configureToggleRow(rowDebugOverlay, R.string.setting_debug_overlay,      R.string.setting_debug_overlay_subtitle)
         configureToggleRow(rowForceHighRes, R.string.setting_force_high_res,      R.string.setting_force_high_res_subtitle)
 
@@ -182,6 +200,7 @@ class SettingsFragment : Fragment() {
         setToggle(rowPinAuth,      settings.airPlayPinAuthEnabled)
         setToggle(rowSmartFill,    settings.smartFillEnabled)
         setToggle(rowForceScreenMirroring, settings.forceScreenMirroring)
+        setToggle(rowAdvertiseInBackground, settings.advertiseInBackground)
         setToggle(rowStartOnBoot,  settings.startOnBoot)
         setToggle(rowDebugOverlay, settings.showDebugOverlay)
         setToggle(rowForceHighRes, settings.forceHighResolution)
@@ -237,6 +256,11 @@ class SettingsFragment : Fragment() {
         // sender that has already discovered Ferry keeps the old capability set until it re-resolves.
         setToggleListener(rowForceScreenMirroring) { enabled ->
             saveAndRestart { it.copy(forceScreenMirroring = enabled) }
+        }
+        // Both of these change whether the receiver may outlive the app, which MainActivity acts on
+        // at onStop — so a plain save() is enough; there is nothing running to reconfigure.
+        setToggleListener(rowAdvertiseInBackground) { enabled ->
+            save { it.copy(advertiseInBackground = enabled) }
         }
         setToggleListener(rowStartOnBoot)  { enabled -> save { it.copy(startOnBoot = enabled) } }
         setToggleListener(rowDebugOverlay) { enabled ->

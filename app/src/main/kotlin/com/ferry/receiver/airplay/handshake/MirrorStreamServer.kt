@@ -92,6 +92,9 @@ class MirrorStreamServer(
     // When the current run of skipped-while-resyncing frames began, or 0 if we are not skipping.
     // Decoder thread only — decodeFrame and configureDecoder both run on it, so no volatile needed.
     private var skipStreakStartNs = 0L
+    // Earliest time rebuildDecoder may try again, set by discardDecoder after a failure. Decoder
+    // thread only, like skipStreakStartNs.
+    private var nextRebuildAllowedNs = 0L
     private var lastStatMs = 0L
     // Set by the reader thread when a frame is dropped under load; the decoder thread then skips
     // frames until the next keyframe (IDR) so it never decodes a reference-broken, corrupt stream.
@@ -109,6 +112,13 @@ class MirrorStreamServer(
      * flight*, for a gap that lands after that IDR in stream order — silently reintroducing exactly
      * the corruption this change removes. Comparing the count across the decode call means the flag
      * is only cleared when the resync it belongs to is genuinely the one that just completed.
+     *
+     * Kept, but no longer load-bearing the way it was. Through 5.5.0 this guard fired routinely,
+     * because the keyframe wait was itself long enough to overflow the queue during the IDR's own
+     * decode call — so the resync it refused to clear was one that the wait had just caused, and the
+     * picture froze for another [RESYNC_GIVE_UP_MS]. [waitBudgetMs] stops the wait spending that
+     * headroom, so what reaches this guard now is what it was written for: a real reader-side gap
+     * that genuinely does land after this IDR in stream order.
      */
     @Volatile private var resyncArmSeq = 0
 
@@ -263,13 +273,41 @@ class MirrorStreamServer(
         Companion.parseSpsPps(payload, size)?.let { (sps, pps) -> Config(sps, pps) }
 
     // ─── Decoder thread: consume the queue; the only thread that touches the decoder ──────────
+    /**
+     * The catch is **inside** the loop, and that placement is the whole point.
+     *
+     * It used to wrap the loop. `VideoDecoder.initialize` can throw for reasons that are entirely
+     * transient — `MediaCodec.createDecoderByType` and `configure` both throw unchecked, and
+     * `CodecException` is a RuntimeException — so a single bad moment (another app grabbing the
+     * hardware decoder, a surface torn down mid-configure) exited this loop for good. `running`
+     * stayed true, so the reader kept filling a queue with nobody draining it: every frame dropped,
+     * picture frozen, and no way back short of the sender reconnecting. That is a large part of
+     * "hung for a very long time".
+     *
+     * Recovery is to drop the decoder and let [decodeFrame] rebuild it from the cached SPS/PPS on
+     * the next frame — nulling [configuredSurface] is what triggers that. [REBUILD_BACKOFF_MS] then
+     * rate-limits the retry, so a decoder that keeps failing costs one attempt per second instead of
+     * one per frame.
+     *
+     * There is deliberately no give-up count. These failures are overwhelmingly transient, and a
+     * ceiling would only reintroduce the original bug on a longer timer — a session that exhausted
+     * it would be just as permanently frozen. The session already has an owner that ends it: the
+     * reader thread, when the sender closes the socket.
+     */
     private fun runDecoder() {
         try {
             while (running) {
                 val item = queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
-                when (item) {
-                    is Config -> configureDecoder(item.sps, item.pps)
-                    is Frame -> decodeFrame(item)
+                try {
+                    when (item) {
+                        is Config -> configureDecoder(item.sps, item.pps)
+                        is Frame -> decodeFrame(item)
+                    }
+                } catch (e: Exception) {
+                    if (!running) break
+                    Logger.e("Mirror: decode step failed — dropping decoder, " +
+                        "retrying in ${REBUILD_BACKOFF_MS}ms", e)
+                    discardDecoder()
                 }
             }
         } catch (e: Exception) {
@@ -278,6 +316,22 @@ class MirrorStreamServer(
             decoder?.release()
             decoder = null
         }
+    }
+
+    /**
+     * Tears the decoder down so the next frame rebuilds it from the cached SPS/PPS.
+     *
+     * [lastSps]/[lastPps] are deliberately kept. They describe the stream, not the codec, and they
+     * are still valid after a codec failure — requiring a fresh type-1 config packet instead would
+     * mean waiting on the sender to volunteer one, which it may never do.
+     */
+    private fun discardDecoder() {
+        runCatching { decoder?.release() }
+            .onFailure { Logger.w("Mirror: decoder release during recovery failed — ${it.message}") }
+        decoder = null
+        configuredSurface = null     // forces decodeFrame to rebuild on the next frame
+        awaitingKeyframe = true      // a fresh decoder must start at an IDR
+        nextRebuildAllowedNs = System.nanoTime() + REBUILD_BACKOFF_MS * 1_000_000L
     }
 
     private fun configureDecoder(sps: ByteArray, pps: ByteArray) {
@@ -314,6 +368,10 @@ class MirrorStreamServer(
      * frame (frames are dropped until then).
      */
     private fun rebuildDecoder(surface: Surface?) {
+        // Rate-limit retries after a failure. Returning *before* configuredSurface is written is
+        // what keeps the retry alive: decodeFrame only rebuilds when the live surface differs from
+        // configuredSurface, so recording the surface here would mean never trying again.
+        if (System.nanoTime() < nextRebuildAllowedNs) return
         decoder?.release()
         decoder = null
         configuredSurface = surface
@@ -338,9 +396,13 @@ class MirrorStreamServer(
             rebuildDecoder(liveSurface)
         }
         val d = decoder ?: return                              // need surface + SPS/PPS first
-        if (!d.isHealthy) {                                    // error state — drop, await next config
-            Logger.w("Mirror: decoder unhealthy — dropping, awaiting new SPS/PPS")
-            d.release(); decoder = null; configuredSurface = null; lastSps = null; lastPps = null
+        if (!d.isHealthy) {
+            // MediaCodec error state cannot be cleared by reconfigure — the decoder has to be
+            // replaced. Rebuild from the cached SPS/PPS rather than clearing them and waiting for
+            // the sender to volunteer a fresh type-1 config packet, which it is under no obligation
+            // to send; that wait was itself a way for the picture to stop and never come back.
+            Logger.w("Mirror: decoder unhealthy — dropping, rebuilding from cached SPS/PPS")
+            discardDecoder()
             return
         }
         // After a reference frame goes missing the stream is reference-broken; skip until the next
@@ -376,7 +438,13 @@ class MirrorStreamServer(
         // Every predicted frame after it decoded against nothing, and because the flag was already
         // clear, nothing re-armed the resync. That is the corruption that lasted until the *next*
         // IDR, a full GOP later, and it is the bug this ordering fixes.
-        val accepted = d.decodeNalUnit(annexB, framePtsUs, length, keyframe = frame.keyframe)
+        // Sampled before the call, because the call is what spends it: the budget is derived from
+        // how much queue headroom is left to absorb what the reader enqueues while we block.
+        val accepted = d.decodeNalUnit(
+            annexB, framePtsUs, length,
+            keyframe = frame.keyframe,
+            waitBudgetMs = Companion.waitBudgetMs(queue.size),
+        )
 
         if (accepted) {
             if (framePtsUs == 0L) Logger.i("Mirror: first video frame fed to decoder (${length}B)")
@@ -490,6 +558,53 @@ class MirrorStreamServer(
          * screen, considerably more.
          */
         private const val RESYNC_GIVE_UP_MS = 3_000L
+
+        /**
+         * Minimum gap between decoder rebuild attempts after a failure.
+         *
+         * Long enough that a codec failing every time costs one attempt per second rather than one
+         * per frame (building a MediaCodec is not cheap, and the usual cause — another app holding
+         * the hardware decoder — needs wall-clock time to clear, not retries). Short enough that a
+         * transient failure costs about a second of picture rather than the session.
+         */
+        private const val REBUILD_BACKOFF_MS = 1_000L
+
+        /**
+         * Frames of queue headroom the decoder thread is never allowed to spend waiting.
+         *
+         * The budget below is an estimate built on a nominal 60 fps reader; this absorbs the error
+         * in that estimate, plus the frames the reader adds between [waitBudgetMs] sampling the
+         * depth and the wait actually beginning.
+         */
+        private const val WAIT_BUDGET_RESERVE_FRAMES = 4
+
+        /** Nominal reader cadence — one frame per interval at 60 fps. */
+        private const val FRAME_INTERVAL_MS = 16L
+
+        /**
+         * How long the decoder thread may block inside a single `decodeNalUnit`, given how full the
+         * queue already is.
+         *
+         * This is the guard 5.5.0 assumed it had. `decodeNalUnit` blocks waiting for a free codec
+         * input buffer, and it does so on the *only* thread that drains [queue] — so while it waits,
+         * the reader keeps enqueuing and nothing is removed. Wait long enough and the queue
+         * overflows; [enqueue] then has to drop a referenced frame, which arms [awaitingKeyframe]
+         * and stops the picture for up to [RESYNC_GIVE_UP_MS]. The wait meant to save one frame
+         * costs three seconds of them.
+         *
+         * So the wait is capped at the time the remaining headroom can actually cover:
+         * `(headroom - reserve) x frame interval`. Empty queue → the full ceiling (192 ms of budget
+         * against a 100 ms keyframe ceiling, so the common case is exactly what 5.5.0 intended).
+         * Queue within [WAIT_BUDGET_RESERVE_FRAMES] of full → zero, drop immediately, because at
+         * that depth there is nothing left to spend and frames are already piling up behind this one.
+         *
+         * Deliberately a pure function of depth, in the companion and `internal`, so the policy is
+         * unit-testable without a socket or a codec.
+         */
+        internal fun waitBudgetMs(queueDepth: Int, capacity: Int = QUEUE_CAPACITY): Long {
+            val headroom = capacity - queueDepth - WAIT_BUDGET_RESERVE_FRAMES
+            return if (headroom <= 0) 0L else headroom * FRAME_INTERVAL_MS
+        }
 
         private const val READ_BUFFER = 256 * 1024             // > one frame, so most reads miss the OS
         private const val SOCKET_RCVBUF = 1024 * 1024          // kernel-side burst absorption

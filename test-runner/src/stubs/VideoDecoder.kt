@@ -33,11 +33,14 @@ class VideoDecoder(outputSurface: Any?) {
      * it did not. The stub always accepts — no JVM test exercises the hardware-decode path, and
      * "accepted" is the non-eventful answer.
      */
+    // Signature must track the real VideoDecoder — MirrorStreamServer is compiled against this
+    // stub here, and it passes waitBudgetMs by name.
     fun decodeNalUnit(
         nalUnit: ByteArray,
         presentationTimeUs: Long = 0L,
         length: Int = nalUnit.size,
         keyframe: Boolean = false,
+        waitBudgetMs: Long = Long.MAX_VALUE,
     ): Boolean = true
 
     fun release() {}

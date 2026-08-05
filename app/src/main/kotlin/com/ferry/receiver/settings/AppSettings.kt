@@ -91,8 +91,33 @@ data class AppSettings(
 
     // ─── Service behavior ──────────────────────────────────────────────────
     /**
+     * Whether Ferry keeps receiving — advertising over mDNS and listening on port 7000 — while the
+     * app itself is closed.
+     *
+     * **Defaults OFF, and unlike most defaults here that is a security decision.** Through 5.5.0
+     * there was no choice: the receiver simply stayed up. `MainActivity` stopped the service only
+     * when `isFinishing`, and on Fire TV the Home button produces `onStop` without ever finishing
+     * the activity, so Ferry kept announcing itself to the network indefinitely after the user
+     * believed they had closed it. Combined with [airPlayPinAuthEnabled] defaulting to false, that
+     * left an invisible, unauthenticated receiver on the LAN — anything that could reach the subnet
+     * could put video and audio on the TV, with nothing on screen to suggest Ferry was still
+     * listening.
+     *
+     * Off, the attack surface exists only while the user is looking at the app. On, Ferry behaves
+     * as it did before, which is the right choice for a TV that is meant to be castable at any time
+     * on a network its owner trusts — but it is now a choice, made deliberately.
+     *
+     * [startOnBoot] implies this; see [receiveWhenClosed].
+     */
+    val advertiseInBackground: Boolean = false,
+
+    /**
      * Whether FerryService starts automatically on device boot.
      * Requires the RECEIVE_BOOT_COMPLETED permission to be effective.
+     *
+     * Implies [advertiseInBackground] — starting headless at boot is by definition receiving with
+     * no app open, so honouring one without the other would produce a service that starts on boot
+     * and then immediately stops itself. See [receiveWhenClosed].
      */
     val startOnBoot: Boolean = false,
 
@@ -116,10 +141,21 @@ data class AppSettings(
     val forceHighResolution: Boolean = false,
 
     /**
-     * When true, accept the mirroring audio stream (type 96, AAC-ELD). EXPERIMENTAL: macOS uses
-     * realtime audio clock-sync (RTCP) that isn't fully implemented yet, which can make macOS tear
-     * the whole mirror session down after a couple of seconds — so this defaults OFF to keep video
-     * mirroring rock-solid. Turn on to experiment with audio.
+     * When true, accept the mirroring audio stream (type 96, AAC-ELD).
+     *
+     * **Defaults ON.** This doc comment claimed the opposite — "defaults OFF to keep video
+     * mirroring rock-solid" — from the initial commit through 5.5.0, while the value beside it was
+     * `true` the entire time. Corrected here to what the code has always done, not the other way
+     * round: mirror audio has been on in every shipped build, and the audio work that followed
+     * (per-path volume in 3.1.0, the compressing boost in [audioBoostDb]) was all built and used
+     * against it, so "on" is the behaviour that has actually been exercised on hardware.
+     *
+     * The warning the old comment carried is kept, because it is a real failure mode rather than a
+     * claim about the default: macOS drives mirroring audio with realtime RTCP clock-sync that
+     * Ferry does not fully implement, and a sender that gives up on the sync can tear down the
+     * **whole** mirror session — video included — seconds after it starts. If a Mac connects and
+     * then drops repeatedly, turn this off and see whether video alone is stable; that is the
+     * single most useful thing to know when diagnosing it.
      */
     val mirrorAudioEnabled: Boolean = true,
 
@@ -167,6 +203,17 @@ data class AppSettings(
      */
     val anyProtocolEnabled: Boolean
         get() = airPlayEnabled || miracastEnabled || castEnabled
+
+    /**
+     * Whether the receiver should keep running once the app is no longer on screen.
+     *
+     * The single question `MainActivity` actually needs answered when it backgrounds, and the
+     * reason it is derived rather than stored: [startOnBoot] would otherwise be a toggle that
+     * appears to work and silently does not, since a service started at boot with no activity
+     * would shut itself down moments later.
+     */
+    val receiveWhenClosed: Boolean
+        get() = advertiseInBackground || startOnBoot
 
     companion object {
         /** The default settings instance used on first launch. */

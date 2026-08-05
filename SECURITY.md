@@ -95,6 +95,23 @@ persisted as a whole record, so if you have ever changed any setting in the app,
 stored value wins and nothing changes. The new default reaches only installs that have
 never written a setting — fresh installs, and users who never opened Settings.
 
+## The receiver no longer runs while the app is closed
+
+**Through 5.5.0, Ferry kept advertising itself indefinitely after you thought you had
+closed it.** The activity stopped the service only when it was *finishing*, and Fire TV's
+Home button does not finish an activity — it stops it. So the receiver stayed up: mDNS
+still announcing, port 7000 still listening, and nothing on screen to say so.
+
+Combined with the PIN default above, that is the part worth stating plainly: an
+unauthenticated receiver was left on the LAN with no visible indication it was there.
+Anything that could reach the subnet could put video and audio on the TV.
+
+**As of 6.0.0, receiving is scoped to the app being open.** Leave Ferry and the receiver
+stops, the mDNS registration is withdrawn, and port 7000 closes. Settings → **Keep
+receiving when closed** restores the old always-on behaviour as a deliberate choice, and
+"Start on boot" implies it. The service also no longer declares itself sticky, so Android
+cannot silently resurrect a receiver with no app on screen and no user action.
+
 ## Hardening you can do
 
 1. **Turn on PIN pairing** (Settings → Require pairing PIN) so an unknown device can't
@@ -105,8 +122,9 @@ never written a setting — fresh installs, and users who never opened Settings.
    This both hardens the device and independently verifies the "no internet required"
    claim — if mirroring still works with WAN blocked, that claim is confirmed by
    observation rather than by trusting a source review.
-4. **Stop the service when you're not using it** (notification → Stop). No listener, no
-   attack surface.
+4. **Leave "Keep receiving when closed" off** (the default as of 6.0.0), so Ferry only
+   listens while it is on screen. You can also stop the service outright at any time from
+   the notification → Stop. No listener, no attack surface.
 5. **Build from source.** Ferry's release workflow builds APKs from a tagged commit in
    CI, so a release has verifiable provenance — but building it yourself is strictly
    better.

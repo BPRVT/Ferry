@@ -184,28 +184,40 @@ class VideoDecoder(private val outputSurface: Surface) {
             }
         }
 
-        // Create the hardware H.264 decoder.
-        // "video/avc" is the MIME type for H.264. Android will pick the best
-        // available hardware decoder for this format.
-        val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        mediaCodec = codec
+        // Everything from here can throw: createDecoderByType and configure both throw unchecked,
+        // and a CodecException is a RuntimeException. The exception is meant to propagate — the
+        // caller decides whether to retry — but it must not leave a half-built decoder behind. In
+        // particular the HandlerThread below is started before configure(), and when configure threw,
+        // the partially built VideoDecoder was simply dropped by the caller without release() ever
+        // being called: one leaked thread per failure, forever.
+        try {
+            // Create the hardware H.264 decoder.
+            // "video/avc" is the MIME type for H.264. Android will pick the best
+            // available hardware decoder for this format.
+            val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            mediaCodec = codec
 
-        // Async mode. setCallback MUST precede configure(). See [callbackHandler] for why this runs
-        // on its own thread rather than the caller's.
-        val thread = HandlerThread("FerryVideoDecoder").also { it.start() }
-        callbackThread = thread
-        codec.setCallback(decoderCallback, Handler(thread.looper))
+            // Async mode. setCallback MUST precede configure(). See [callbackHandler] for why this
+            // runs on its own thread rather than the caller's.
+            val thread = HandlerThread("FerryVideoDecoder").also { it.start() }
+            callbackThread = thread
+            codec.setCallback(decoderCallback, Handler(thread.looper))
 
-        // Configure the decoder:
-        // - format: what the input will look like (H.264, width, height, SPS/PPS)
-        // - outputSurface: where decoded frames go (directly to screen — no intermediate copy)
-        // - crypto: null (we handle decryption before this point, if needed)
-        // - flags: 0 (0 = decoder mode; CONFIGURE_FLAG_ENCODE would be for encoding)
-        codec.configure(format, outputSurface, null, 0)
-        codec.start()
+            // Configure the decoder:
+            // - format: what the input will look like (H.264, width, height, SPS/PPS)
+            // - outputSurface: where decoded frames go (directly to screen — no intermediate copy)
+            // - crypto: null (we handle decryption before this point, if needed)
+            // - flags: 0 (0 = decoder mode; CONFIGURE_FLAG_ENCODE would be for encoding)
+            codec.configure(format, outputSurface, null, 0)
+            codec.start()
+        } catch (e: Exception) {
+            Logger.e("VideoDecoder initialization failed — releasing partial state", e)
+            release()
+            throw e
+        }
 
         isInitialized = true
-        Logger.i("H.264 decoder initialized (async, codec=${runCatching { codec.name }.getOrNull()}, " +
+        Logger.i("H.264 decoder initialized (async, codec=${runCatching { mediaCodec?.name }.getOrNull()}, " +
                  "lowLatency=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.R})")
     }
 
@@ -229,6 +241,11 @@ class VideoDecoder(private val outputSurface: Surface) {
      * @param keyframe true when this access unit carries an IDR slice. An IDR is the only frame
      *   that ends a corruption episode, so it is worth waiting materially longer for a free input
      *   buffer — see [KEYFRAME_INPUT_BUFFER_WAIT_MS].
+     * @param waitBudgetMs ceiling the caller puts on how long this call may block, on top of the
+     *   [INPUT_BUFFER_WAIT_MS] / [KEYFRAME_INPUT_BUFFER_WAIT_MS] limits. Only the caller knows what
+     *   is queued *behind* this frame, and waiting here stalls that queue — see
+     *   `MirrorStreamServer.waitBudgetMs` for why that matters and how the number is derived.
+     *   Defaults to unbounded, which leaves the two constants in charge for callers with no queue.
      * @return true if the frame was handed to the codec, false if it was dropped. The caller needs
      *   this: dropping a frame that later frames predict from leaves the stream reference-broken,
      *   and only the caller knows whether that was the case.
@@ -238,6 +255,7 @@ class VideoDecoder(private val outputSurface: Surface) {
         presentationTimeUs: Long,
         length: Int = nalUnit.size,
         keyframe: Boolean = false,
+        waitBudgetMs: Long = Long.MAX_VALUE,
     ): Boolean {
         val codec = mediaCodec ?: run {
             Logger.w("decodeNalUnit() called but decoder not initialized")
@@ -254,8 +272,16 @@ class VideoDecoder(private val outputSurface: Surface) {
             // the sender's *next* IDR, which on an iOS mirroring encoder is a whole GOP away —
             // 10-15 seconds of visibly corrupt picture, longer if the screen is static and the
             // encoder defers keyframes. Tens of milliseconds against tens of seconds.
-            val wait = if (keyframe) KEYFRAME_INPUT_BUFFER_WAIT_MS else INPUT_BUFFER_WAIT_MS
-            val inputBufferIndex = availableInputBuffers.poll(wait, TimeUnit.MILLISECONDS)
+            //
+            // Both limits are then capped by what the caller can afford. That cap is not a detail:
+            // these waits block the caller's thread, and when that thread is also the one draining
+            // a frame queue, a wait long enough to overflow the queue destroys more frames than it
+            // saves. See MirrorStreamServer.waitBudgetMs.
+            val ceiling = if (keyframe) KEYFRAME_INPUT_BUFFER_WAIT_MS else INPUT_BUFFER_WAIT_MS
+            val wait = ceiling.coerceAtMost(waitBudgetMs)
+            val inputBufferIndex =
+                if (wait <= 0L) availableInputBuffers.poll()
+                else availableInputBuffers.poll(wait, TimeUnit.MILLISECONDS)
 
             if (inputBufferIndex != null) {
                 // We got an input buffer — fill it with the NAL unit bytes
@@ -281,9 +307,12 @@ class VideoDecoder(private val outputSurface: Surface) {
                 // Drop this NAL unit to avoid building up backlog (prefer low latency).
                 if (keyframe) {
                     // Loud, because this is the expensive one: the picture is now corrupt until the
-                    // sender's next IDR, and there is no way to ask it for one.
-                    Logger.w("VideoDecoder: dropped a KEYFRAME after ${KEYFRAME_INPUT_BUFFER_WAIT_MS}ms " +
-                             "— picture will stay broken until the sender's next IDR")
+                    // sender's next IDR, and there is no way to ask it for one. The wait is logged
+                    // because it is no longer a constant — a budget-limited wait here means the
+                    // queue was already backing up, which is a different problem from a slow codec.
+                    Logger.w("VideoDecoder: dropped a KEYFRAME after ${wait}ms " +
+                             "(budget=${waitBudgetMs}ms) — picture will stay broken " +
+                             "until the sender's next IDR")
                 } else {
                     Logger.v { "VideoDecoder: no input buffer available, dropping NAL unit" }
                 }
@@ -370,9 +399,15 @@ class VideoDecoder(private val outputSurface: Surface) {
          * hardware is rarely busy for *long*, it is busy for a *moment*, and 4 ms often failed to
          * ride that out where 16 ms should.
          *
-         * The cost is bounded and cannot bring back the 5.0.0 freeze: with one frame queued, the
-         * extra 12 ms delays nothing behind it, and waiting longer only ever makes a frame more
-         * likely to be decoded, never less.
+         * A **ceiling**, not the wait itself: the caller's `waitBudgetMs` can cut it shorter.
+         *
+         * 5.5.0 justified the raise with "with one frame queued, the extra 12 ms delays nothing
+         * behind it". That is true at queue depth 1, and in 5.5.0 nothing whatsoever held the depth
+         * there. Because this wait blocks MirrorStreamServer's decoder thread — the only thread
+         * draining its queue — a 16 ms stall while the reader keeps enqueuing at 60 fps could
+         * overflow a 16-deep queue, which arms a keyframe resync, which freezes the picture for up
+         * to 3 seconds. The reasoning was sound and the guard it assumed did not exist; the budget
+         * is that guard. See MirrorStreamServer.waitBudgetMs.
          */
         private const val INPUT_BUFFER_WAIT_MS = 16L
 
@@ -387,9 +422,18 @@ class VideoDecoder(private val outputSurface: Surface) {
          * On iOS that is a full GOP — measured at 10-15 seconds, and longer on a static screen
          * where the encoder defers keyframes because little is changing.
          *
-         * 100 ms is affordable. At 60 fps it admits ~6 frames into a queue that holds 16, and
-         * MirrorStreamServer.enqueue sheds non-reference frames first if that fills. So the worst
-         * case is a few invisible frames dropped to save a 10-second corruption episode.
+         * 100 ms is affordable *when the queue is empty*. At 60 fps it admits ~6 frames into a queue
+         * that holds 16, and MirrorStreamServer.enqueue sheds non-reference frames first if that
+         * fills. So the worst case is a few invisible frames dropped to save a 10-second corruption
+         * episode.
+         *
+         * When the queue is *not* empty, it was not affordable at all, and this was the sharper half
+         * of the 5.5.0 freeze. A 100 ms block is ~6 frames of reader output; if that overflowed the
+         * queue while the IDR was still in flight, `resyncArmSeq` moved, and the arming guard in
+         * decodeFrame then refused to let the accepted IDR clear the resync — so the keyframe wait
+         * caused the overflow that invalidated the keyframe it was waiting for, and the picture
+         * froze again immediately. Hence the ceiling/budget split: the budget keeps enough queue
+         * headroom that this wait can no longer be the thing that overflows it.
          */
         private const val KEYFRAME_INPUT_BUFFER_WAIT_MS = 100L
 

@@ -11,9 +11,13 @@
     ACCESS_NETWORK_STATE        — required to detect network changes (reconnect logic)
     FOREGROUND_SERVICE          — required for persistent background receiver service (Android 9+)
     FOREGROUND_SERVICE_CONNECTED_DEVICE — required for connectedDevice foreground service type (Android 14+)
-    CHANGE_WIFI_STATE           — required by WifiP2pManager for Miracast Wi-Fi Direct
-    ACCESS_FINE_LOCATION        — required by Wi-Fi P2P / Miracast discovery on Android 10+
     RECEIVE_BOOT_COMPLETED      — required for "start on boot" feature
+
+    Wi-Fi Direct permissions (CHANGE_WIFI_STATE, the capped location pair, NEARBY_WIFI_DEVICES)
+    live in src/googletv/AndroidManifest.xml as of 6.0.0. They exist only for Miracast, and
+    Miracast is not part of the Fire TV build — see src/firetv/.../OptionalProtocols.kt. Asking
+    a Fire TV owner for Wi-Fi Direct and location permissions the app could never use was not
+    defensible.
 
     Explicitly NOT requested:
     - RECORD_AUDIO      (we receive audio, we do not record it)
@@ -32,38 +36,6 @@
     <!-- Foreground service — keeps receiver alive when app is in background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-
-    <!--
-        Miracast (Wi-Fi Direct / Wi-Fi P2P).
-
-        The location permissions are capped at API 32. Android 13 introduced NEARBY_WIFI_DEVICES
-        precisely so an app that scans for nearby devices no longer has to hold a location
-        permission it does not want; on 33+ that permission alone covers Wi-Fi P2P discovery.
-        Without the cap, Ferry keeps asking for fine location on every modern device and the user
-        has to take on trust that it is unused. maxSdkVersion turns that into something the manifest
-        states outright.
-
-        neverForLocation is the matching assertion for NEARBY_WIFI_DEVICES: Ferry does not derive
-        location from Wi-Fi scan results. There is no LocationManager, no location provider, and no
-        geocoding anywhere in the tree (see AUDIT.md).
-    -->
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <uses-permission
-        android:name="android.permission.ACCESS_COARSE_LOCATION"
-        android:maxSdkVersion="32" />
-    <uses-permission
-        android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="32" />
-    <!--
-        UnusedAttribute: usesPermissionFlags is API 31+, and minSdk here is 25. That is the point —
-        older platforms ignore it, and the permission it qualifies does not exist before API 33
-        anyway. Suppressed rather than dropped, because dropping it would mean asserting nothing
-        about location on exactly the platforms where the assertion is meaningful.
-    -->
-    <uses-permission
-        android:name="android.permission.NEARBY_WIFI_DEVICES"
-        android:usesPermissionFlags="neverForLocation"
-        tools:ignore="UnusedAttribute" />
 
     <!-- Start on boot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -85,12 +57,6 @@
         android:required="true" />
     <uses-feature
         android:name="android.hardware.wifi"
-        android:required="false" />
-    <uses-feature
-        android:name="android.hardware.location.gps"
-        android:required="false" />
-    <uses-feature
-        android:name="android.hardware.location.network"
         android:required="false" />
 
     <application

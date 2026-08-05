@@ -202,6 +202,11 @@
             android:layout_marginTop="24dp" />
 
         <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_advertise_in_background"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <include layout="@layout/settings_toggle_row"
             android:id="@+id/row_start_on_boot"
             android:layout_width="match_parent"
             android:layout_height="72dp" />
