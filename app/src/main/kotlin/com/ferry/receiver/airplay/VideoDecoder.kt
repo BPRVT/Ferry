@@ -5,6 +5,7 @@ import android.media.MediaFormat
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Process
 import android.view.Surface
 import com.ferry.receiver.util.Logger
 import com.ferry.receiver.util.RenderPacer
@@ -64,6 +65,15 @@ class VideoDecoder(private val outputSurface: Surface) {
     /**
      * MediaCodec delivers async callbacks on this thread's Looper. It must not be the main thread
      * (a stalled UI would stall decode) nor the decoder thread (which blocks in [decodeNalUnit]).
+     *
+     * Runs at [Process.THREAD_PRIORITY_URGENT_DISPLAY], because it is not a bookkeeping thread —
+     * it is the **render** thread. `onOutputBufferAvailable` is where [shouldRender] decides a
+     * frame's fate and `releaseOutputBuffer` puts it on screen, so every frame the TV displays is
+     * displayed by this thread, on a deadline set by the panel. At the default priority it competes
+     * on equal terms with any background work the system feels like running, and losing that race
+     * does not merely delay the frame: a buffer not handed back promptly is a buffer the codec
+     * cannot reuse, which is the exact output-side jam that starves the input side and destroys
+     * frames (see [shouldRender]).
      */
     private var callbackThread: HandlerThread? = null
 
@@ -229,7 +239,8 @@ class VideoDecoder(private val outputSurface: Surface) {
 
             // Async mode. setCallback MUST precede configure(). See [callbackHandler] for why this
             // runs on its own thread rather than the caller's.
-            val thread = HandlerThread("FerryVideoDecoder").also { it.start() }
+            val thread = HandlerThread("FerryVideoDecoder", Process.THREAD_PRIORITY_URGENT_DISPLAY)
+                .also { it.start() }
             callbackThread = thread
             codec.setCallback(decoderCallback, Handler(thread.looper))
 

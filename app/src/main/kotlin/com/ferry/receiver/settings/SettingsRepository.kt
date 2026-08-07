@@ -119,6 +119,7 @@ class SettingsRepository(private val context: Context) {
         startOnBoot        = this[Keys.START_ON_BOOT]           ?: false,
         showDebugOverlay   = this[Keys.SHOW_DEBUG_OVERLAY]      ?: false,
         forceHighResolution = this[Keys.FORCE_HIGH_RESOLUTION]  ?: false,
+        forceLowResolution = this[Keys.FORCE_LOW_RESOLUTION]    ?: false,
         mirrorAudioEnabled = this[Keys.MIRROR_AUDIO_ENABLED]    ?: true,
         smartFillEnabled   = this[Keys.SMART_FILL]              ?: true,
         audioBoostDb       = com.ferry.receiver.util.AudioGain.clampBoostDb(this[Keys.AUDIO_BOOST_DB] ?: 0)
@@ -139,6 +140,7 @@ class SettingsRepository(private val context: Context) {
         this[Keys.START_ON_BOOT]        = settings.startOnBoot
         this[Keys.SHOW_DEBUG_OVERLAY]   = settings.showDebugOverlay
         this[Keys.FORCE_HIGH_RESOLUTION] = settings.forceHighResolution
+        this[Keys.FORCE_LOW_RESOLUTION]  = settings.forceLowResolution
         this[Keys.MIRROR_AUDIO_ENABLED] = settings.mirrorAudioEnabled
         this[Keys.SMART_FILL]           = settings.smartFillEnabled
         this[Keys.AUDIO_BOOST_DB]       = settings.audioBoostDb
@@ -162,6 +164,7 @@ class SettingsRepository(private val context: Context) {
         val START_ON_BOOT       = booleanPreferencesKey("start_on_boot")
         val SHOW_DEBUG_OVERLAY  = booleanPreferencesKey("show_debug_overlay")
         val FORCE_HIGH_RESOLUTION = booleanPreferencesKey("force_high_resolution")
+        val FORCE_LOW_RESOLUTION  = booleanPreferencesKey("force_low_resolution")
         val MIRROR_AUDIO_ENABLED = booleanPreferencesKey("mirror_audio_enabled")
         val AUDIO_BOOST_DB      = intPreferencesKey("audio_boost_db")
     }

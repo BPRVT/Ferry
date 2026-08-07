@@ -145,4 +145,40 @@ class AppSettingsTest {
         val b = AppSettings(displayName = "TV2")
         assertTrue(a != b)
     }
+
+    // ─── Advertised mirroring resolution ────────────────────────────────────
+
+    @Test
+    fun `default advertises 1080p`() {
+        val s = AppSettings.DEFAULT
+        assertEquals(1920, s.mirrorWidth)
+        assertEquals(1080, s.mirrorHeight)
+    }
+
+    @Test
+    fun `high resolution advertises 1440p`() {
+        val s = AppSettings.DEFAULT.copy(forceHighResolution = true)
+        assertEquals(2560, s.mirrorWidth)
+        assertEquals(1440, s.mirrorHeight)
+    }
+
+    @Test
+    fun `low resolution advertises 720p`() {
+        val s = AppSettings.DEFAULT.copy(forceLowResolution = true)
+        assertEquals(1280, s.mirrorWidth)
+        assertEquals(720, s.mirrorHeight)
+    }
+
+    /**
+     * The UI keeps these mutually exclusive, but a settings file from an older build or edited by
+     * hand can still hold both. "Asked for the lightest option" must win over "asked for the
+     * heaviest" — resolving it the other way would hand 1440p to someone whose reason for touching
+     * these settings at all was that 1080p was too much.
+     */
+    @Test
+    fun `low resolution wins when both flags are somehow set`() {
+        val s = AppSettings.DEFAULT.copy(forceHighResolution = true, forceLowResolution = true)
+        assertEquals(1280, s.mirrorWidth)
+        assertEquals(720, s.mirrorHeight)
+    }
 }

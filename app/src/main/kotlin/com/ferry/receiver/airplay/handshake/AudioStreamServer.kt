@@ -66,6 +66,11 @@ class AudioStreamServer(
     // instance is safe and avoids a Cipher.getInstance allocation on every packet (~92/s).
     private val cbcCipher = Cipher.getInstance("AES/CBC/NoPadding")
 
+    // Playback-thread scratch, reused across frames for the same reason as [cbcCipher]. Neither
+    // outlives the call that fills it — see [decodeFrame] and [decryptPacket].
+    private val bufferInfo = MediaCodec.BufferInfo()
+    private var pcmBuffer = ByteArray(0)
+
     // Bind to the IPv6 wildcard (dual-stack) — macOS sends the audio RTP over the session's
     // IPv6 link-local address; a default DatagramSocket binds IPv4-only and never receives it.
     private val socket = ipv6Socket()
@@ -234,12 +239,17 @@ class AudioStreamServer(
     private fun handleRtpPacket(src: ByteArray, offset: Int, length: Int) {
         if (length <= RTP_HEADER) return
         val seq = ((src[offset + 2].toInt() and 0xFF) shl 8) or (src[offset + 3].toInt() and 0xFF)
-        // RAOP RTP: 12-byte header, then AES-128-CBC-encrypted audio payload (copied out of src).
-        val payload = src.copyOfRange(offset + RTP_HEADER, offset + length)
         var resend: IntArray? = null
         synchronized(reorderLock) {
+            // Dedup BEFORE copying. macOS sends each realtime-audio packet 2–3× for redundancy, so
+            // two thirds of everything arriving here is discarded one line later — and the copy used
+            // to happen first, which meant two thirds of these allocations existed only to be thrown
+            // away. At ~92 packets/s of real audio that is ~180 pointless copies a second on the
+            // socket-receive thread, whose entire job is to get back to `receive()` quickly.
             if (isDuplicateSeq(seq)) { dupCount++; return }
-            resend = enqueueInOrder(seq, payload)
+            // RAOP RTP: 12-byte header, then AES-128-CBC-encrypted audio payload. Copied out of
+            // [src] because that is a reused receive buffer and this outlives the current receive.
+            resend = enqueueInOrder(seq, src.copyOfRange(offset + RTP_HEADER, offset + length))
         }
         // Send the resend request OUTSIDE the reorder lock — never hold it across socket I/O.
         resend?.let { requestResend(it[0], it[1]) }
@@ -375,19 +385,28 @@ class AudioStreamServer(
             mc.getInputBuffer(inIdx)!!.apply { clear(); put(aac) }
             mc.queueInputBuffer(inIdx, 0, aac.size, 0, 0)
         }
-        val info = MediaCodec.BufferInfo()
-        var outIdx = mc.dequeueOutputBuffer(info, 0)
+        // [bufferInfo] and [pcmBuffer] are reused across calls rather than allocated per decoded
+        // frame. Both are safe to reuse because neither outlives this method: the info is consumed
+        // immediately, and the PCM is handed to a blocking AudioTrack.write that has copied it by
+        // the time it returns. Playback thread only, like everything else that touches the codec.
+        var outIdx = mc.dequeueOutputBuffer(bufferInfo, 0)
         while (outIdx >= 0) {
             val outBuf: ByteBuffer = mc.getOutputBuffer(outIdx)!!
-            val pcm = ByteArray(info.size)
-            outBuf.position(info.offset); outBuf.get(pcm)
-            if (firstPcm) { Logger.i("Audio: first decoded PCM (${pcm.size}B) → AudioTrack"); firstPcm = false }
+            val pcm = pcmBufferFor(bufferInfo.size)
+            outBuf.position(bufferInfo.offset); outBuf.get(pcm, 0, bufferInfo.size)
+            if (firstPcm) { Logger.i("Audio: first decoded PCM (${bufferInfo.size}B) → AudioTrack"); firstPcm = false }
             // Blocking write paces playback to the audio clock and drops no PCM. Safe here because
             // this runs on the dedicated playback thread, not the socket-receive thread.
-            audioTrack?.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
+            audioTrack?.write(pcm, 0, bufferInfo.size, AudioTrack.WRITE_BLOCKING)
             mc.releaseOutputBuffer(outIdx, false)
-            outIdx = mc.dequeueOutputBuffer(info, 0)
+            outIdx = mc.dequeueOutputBuffer(bufferInfo, 0)
         }
+    }
+
+    /** Reusable PCM staging buffer, grown on demand. See [decodeFrame] for why reuse is safe. */
+    private fun pcmBufferFor(size: Int): ByteArray {
+        if (size > pcmBuffer.size) pcmBuffer = ByteArray(size)
+        return pcmBuffer
     }
 
     private fun initDecoder() {

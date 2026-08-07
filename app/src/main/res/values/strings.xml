@@ -106,6 +106,8 @@
     <string name="setting_debug_overlay_subtitle">Show live FPS, queue and drop stats while streaming</string>
     <string name="setting_force_high_res">Higher resolution (1440p)</string>
     <string name="setting_force_high_res_subtitle">Sharper mirroring; uses more CPU. Off = 1080p</string>
+    <string name="setting_force_low_res">Smoother playback (720p)</string>
+    <string name="setting_force_low_res_subtitle">Asks the sender for fewer pixels — less to send, decode and draw. Try this if video stutters. Off = 1080p</string>
     <string name="setting_force_screen_mirroring">Always mirror the screen</string>
     <string name="setting_force_screen_mirroring_subtitle">Stops apps opening their own player on the TV. Off = apps choose</string>
     <string name="setting_smart_fill">Smart fill</string>

@@ -114,6 +114,15 @@ class FerryService : Service() {
      */
     private lateinit var wifiLock: com.ferry.receiver.util.WifiPerformanceLock
 
+    /**
+     * Watches for the main thread wedging, which is what a "the whole thing froze and then crashed"
+     * report actually is. Runs only while receivers are up — that is the window where a freeze
+     * matters and the only one worth spending a heartbeat on. See [MainThreadWatchdog].
+     */
+    private val mainThreadWatchdog = com.ferry.receiver.util.MainThreadWatchdog { stalledMs, stack ->
+        com.ferry.receiver.util.CrashReporter.recordFreeze(stalledMs, stack)
+    }
+
     // ─── Service Lifecycle ───────────────────────────────────────────────────
 
     override fun onCreate() {
@@ -253,6 +262,7 @@ class FerryService : Service() {
         // power-save mishandles, and the bursty delivery it causes is indistinguishable from a slow
         // decoder from the couch. Released in [stopAllReceiversInternal].
         wifiLock.acquire()
+        mainThreadWatchdog.start()
 
         if (settings.airPlayEnabled) startAirPlay(settings)
 
@@ -411,6 +421,7 @@ class FerryService : Service() {
         // Nothing is listening any more, so stop keeping the radio awake for it. `lateinit`, and
         // onDestroy can land before onCreate on a service that failed to start, hence the guard.
         if (::wifiLock.isInitialized) wifiLock.release()
+        mainThreadWatchdog.stop()
         airPlayReceiver = null
         optionalProtocols = null
         _airPlayState.value = ProtocolState.DISABLED

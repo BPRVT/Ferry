@@ -67,6 +67,7 @@ class SettingsFragment : Fragment() {
     private lateinit var rowStartOnBoot: View
     private lateinit var rowDebugOverlay: View
     private lateinit var rowForceHighRes: View
+    private lateinit var rowForceLowRes: View
     private lateinit var textVersionValue: TextView
     private lateinit var rowReset: LinearLayout
 
@@ -110,6 +111,7 @@ class SettingsFragment : Fragment() {
         rowStartOnBoot      = view.findViewById(R.id.row_start_on_boot)
         rowDebugOverlay     = view.findViewById(R.id.row_debug_overlay)
         rowForceHighRes     = view.findViewById(R.id.row_force_high_res)
+        rowForceLowRes      = view.findViewById(R.id.row_force_low_res)
         textVersionValue    = view.findViewById(R.id.text_version_value)
         rowReset            = view.findViewById(R.id.row_reset)
     }
@@ -152,6 +154,7 @@ class SettingsFragment : Fragment() {
             R.string.setting_start_on_boot_subtitle)
         configureToggleRow(rowDebugOverlay, R.string.setting_debug_overlay,      R.string.setting_debug_overlay_subtitle)
         configureToggleRow(rowForceHighRes, R.string.setting_force_high_res,      R.string.setting_force_high_res_subtitle)
+        configureToggleRow(rowForceLowRes,  R.string.setting_force_low_res,       R.string.setting_force_low_res_subtitle)
 
         textVersionValue.text = BuildConfig.VERSION_NAME
     }
@@ -204,6 +207,7 @@ class SettingsFragment : Fragment() {
         setToggle(rowStartOnBoot,  settings.startOnBoot)
         setToggle(rowDebugOverlay, settings.showDebugOverlay)
         setToggle(rowForceHighRes, settings.forceHighResolution)
+        setToggle(rowForceLowRes,  settings.forceLowResolution)
         textAudioBoostValue.text = boostLabel(settings.audioBoostDb)
     }
 
@@ -271,7 +275,24 @@ class SettingsFragment : Fragment() {
             StreamStats.overlayEnabled = enabled
             save { it.copy(showDebugOverlay = enabled) }
         }
-        setToggleListener(rowForceHighRes) { enabled -> save { it.copy(forceHighResolution = enabled) } }
+        // Both resolution toggles restart the receiver, and each clears the other.
+        //
+        // Restart because the advertised size is not read per request: it is handed to RtspHandler
+        // when AirPlayReceiver is constructed and baked into the /info `displays` record from there,
+        // so a live receiver goes on offering the old size however many times the toggle is flipped.
+        //
+        // Mutually exclusive because "1440p and 720p" is not a thing to ask a sender for, and the
+        // pair is only two switches rather than one three-way control to match every other row on
+        // this screen. AppSettings.mirrorHeight still resolves the conflict defensively, for a
+        // stored value this UI did not write.
+        setToggleListener(rowForceHighRes) { enabled ->
+            if (enabled) setToggle(rowForceLowRes, false)
+            saveAndRestart { it.copy(forceHighResolution = enabled, forceLowResolution = it.forceLowResolution && !enabled) }
+        }
+        setToggleListener(rowForceLowRes) { enabled ->
+            if (enabled) setToggle(rowForceHighRes, false)
+            saveAndRestart { it.copy(forceLowResolution = enabled, forceHighResolution = it.forceHighResolution && !enabled) }
+        }
         setToggleListener(rowSmartFill)    { enabled ->
             // Push straight to StreamStats as well as persisting: StreamingScreen reads the flag on
             // its layout tick, so the picture re-fits within ~200 ms instead of at the next session.

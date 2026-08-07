@@ -92,6 +92,10 @@
         <include layout="@layout/settings_toggle_row"
             android:id="@+id/row_force_high_res" />
 
+        <!-- Lower mirroring resolution (720p) — the one setting that reduces work at the sender -->
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_force_low_res" />
+
         <!-- Smart fill: crop up to 15% rather than showing black bars -->
         <include layout="@layout/settings_toggle_row"
             android:id="@+id/row_smart_fill" />

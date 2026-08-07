@@ -141,6 +141,27 @@ data class AppSettings(
     val forceHighResolution: Boolean = false,
 
     /**
+     * When true, advertise **1280×720** instead of 1920×1080, so the sender encodes a quarter fewer
+     * pixels than 1080p and less than a fifth of 1440p.
+     *
+     * The only setting in Ferry that reduces work at the *source*, which is what makes it the
+     * strongest performance lever available. Everything else here tunes how the receiver copes with
+     * what it is sent; this changes what it is sent. Fewer pixels means a lower bitrate over the
+     * Wi-Fi, fewer macroblocks to decode, and less to push to the panel — all three at once, and
+     * the network half matters most on a link that is already marginal, because it is the one Ferry
+     * cannot otherwise do anything about.
+     *
+     * Off by default. 1080p is the right default for a 1080p panel and looks better; this is for
+     * when smooth matters more than sharp, which on a mirrored screen at couch distance is a trade
+     * most people take without noticing what they gave up.
+     *
+     * Takes precedence over [forceHighResolution] — see [mirrorHeight]. Both are exposed as plain
+     * toggles rather than one three-way control because that is what every other row on the screen
+     * is, and the UI keeps them mutually exclusive.
+     */
+    val forceLowResolution: Boolean = false,
+
+    /**
      * When true, accept the mirroring audio stream (type 96, AAC-ELD).
      *
      * **Defaults ON.** This doc comment claimed the opposite — "defaults OFF to keep video
@@ -185,9 +206,26 @@ data class AppSettings(
     val audioBoostDb: Int = 0
 ) {
 
-    /** Advertised mirroring display size: 2560×1440 when [forceHighResolution], else 1920×1080. */
-    val mirrorWidth: Int get() = if (forceHighResolution) 2560 else 1920
-    val mirrorHeight: Int get() = if (forceHighResolution) 1440 else 1080
+    /**
+     * Advertised mirroring display size: 1280×720, 1920×1080 (default) or 2560×1440.
+     *
+     * [forceLowResolution] wins if both it and [forceHighResolution] are somehow set. The UI clears
+     * one when the other is turned on, so that should not arise — but a settings file written by an
+     * older build, or edited by hand, can still produce it, and the safe reading of "the user asked
+     * for less work" is to give them less work. Resolving it the other way would silently hand the
+     * heaviest setting to someone who explicitly asked for the lightest.
+     */
+    val mirrorWidth: Int get() = when {
+        forceLowResolution -> 1280
+        forceHighResolution -> 2560
+        else -> 1920
+    }
+
+    val mirrorHeight: Int get() = when {
+        forceLowResolution -> 720
+        forceHighResolution -> 1440
+        else -> 1080
+    }
 
     /**
      * Returns the validated, trimmed display name.

@@ -140,8 +140,10 @@ class MirrorStreamServer(
     // and rebuild the decoder — otherwise video stays black after foregrounding.
     @Volatile private var configuredSurface: Surface? = null
     private var framePtsUs = 0L
-    private var framesIn = 0
-    private var framesDropped = 0
+    /** Volatile: written by the reader thread, sampled by the watchdog to measure loss over time. */
+    @Volatile private var framesIn = 0
+    /** Volatile for the same reason as [framesIn] — the watchdog samples it to measure loss. */
+    @Volatile private var framesDropped = 0
     // Drops that cost a keyframe resync (the expensive kind). Split out from framesDropped because
     // the two have wildly different user impact: a disposable drop is invisible, one of these
     // freezes the picture until iOS next sends an IDR.
@@ -191,6 +193,28 @@ class MirrorStreamServer(
 
     /** So the session is only declared dead once, no matter how long the watchdog keeps ticking. */
     @Volatile private var streamDeathReported = false
+
+    // ─── Sustained-degradation escalation (watchdog thread only) ─────────────────────────────
+    //
+    // Reported from hardware, and the observation that shaped this: **stopping and restarting the
+    // share acts like a fresh slate.** That is the single most informative thing anyone has said
+    // about this failure, because of what it rules out. If restarting the *session* fixes it, the
+    // thing that went wrong is inside the session — it is not the network degrading, not the SoC
+    // throttling, and not anything that would survive a fresh SETUP. And Ferry already knows how to
+    // do exactly what the user was doing by hand: ending the RTSP session makes the sender
+    // re-establish it, with fresh keys, a fresh decoder and an empty pipeline.
+    //
+    // So it does it itself now, rather than requiring somebody to notice and reach for the iPad.
+    //
+    // The bar is deliberately high, because a false positive tears down a working cast. Loss is
+    // measured over whole seconds and has to stay bad; the response escalates from the cheap remedy
+    // to the expensive one; and a recycle is rate-limited so a genuinely bad link degrades into
+    // "poor picture" rather than "a session that restarts every ten seconds", which would be worse
+    // than the problem.
+    private var lastFramesIn = 0
+    private var lastFramesLost = 0
+    private var degradedTicks = 0
+    private var lastRecycleMs = 0L
     private var lastStatMs = 0L
     // Set by the reader thread when a frame is dropped under load; the decoder thread then skips
     // frames until the next keyframe (IDR) so it never decodes a reference-broken, corrupt stream.
@@ -426,6 +450,13 @@ class MirrorStreamServer(
      * Reader thread only; [frameBufferSize] needs no synchronisation because of it.
      */
     private fun acquireFrameBuffer(size: Int): ByteArray {
+        // An outsized frame gets a one-off array and does NOT resize the pool, which is the whole
+        // point of the cap. Letting [frameBufferSize] track the largest frame ever seen without a
+        // ceiling means one freak 2 MB frame permanently re-cuts every buffer in the pool to 2 MB —
+        // [FRAME_POOL_CAPACITY] × that, held for the rest of the session, on a device with very
+        // little to spare. Same rule [readBufferFor] applies to the encrypted side, and the reason
+        // that one has it.
+        if (size > POOLED_FRAME_LIMIT) return ByteArray(size)
         if (size > frameBufferSize) frameBufferSize = size
         while (true) {
             val pooled = bufferPool.poll() ?: break
@@ -442,7 +473,7 @@ class MirrorStreamServer(
      * offer is allowed to fail — a full pool means we already have all the buffers we need.
      */
     private fun recycleFrameBuffer(buffer: ByteArray) {
-        if (buffer.size > MAX_RETAINED_BUFFER) return
+        if (buffer.size > POOLED_FRAME_LIMIT) return
         bufferPool.offer(buffer)
     }
 
@@ -516,6 +547,9 @@ class MirrorStreamServer(
                 continue
             }
 
+            // Rule 1c: the pipeline is losing frames steadily. Escalate — rebuild, then recycle.
+            if (checkSustainedLoss(now)) continue
+
             // Rule 2: frames are arriving but none is reaching the screen — the decoder is wedged.
             if (!Companion.isStalled(now, firstArrivalMs, StreamStats.videoLastArrivalMs, StreamStats.videoLastShownMs)) {
                 continue
@@ -531,6 +565,69 @@ class MirrorStreamServer(
                 "while frames are still arriving ($reason) — forcing a decoder rebuild")
             forceRebuild = true
         }
+    }
+
+    /**
+     * Watches the *rate* at which frames are being destroyed, and escalates when it stays bad.
+     *
+     * Loss here means frames Ferry received and then could not use — shed at the queue, or refused
+     * by the decoder for want of an input buffer. Each one costs picture until the sender's next
+     * IDR, so a sustained rate of them is never acceptable and never normal.
+     *
+     * It deliberately does **not** count [StreamStats.videoRenderSkips]. A render skip is the
+     * pacing rule working as designed — the frame was decoded, it just was not displayed, and the
+     * picture is perfect. Confusing "deliberately not shown" with "destroyed" would make a healthy
+     * high-frame-rate stream look like a catastrophe and recycle a session that was fine, which is
+     * the exact class of confident-but-wrong fix this file has collected before.
+     *
+     * @return true if this tick was handled here and the remaining rules should be skipped.
+     */
+    private fun checkSustainedLoss(nowMs: Long): Boolean {
+        val inNow = framesIn
+        val lostNow = framesDropped + decoderDrops
+        val arrived = inNow - lastFramesIn
+        val lost = lostNow - lastFramesLost
+        lastFramesIn = inNow
+        lastFramesLost = lostNow
+
+        if (!Companion.isLosingFrames(arrived, lost)) {
+            if (degradedTicks > 0) {
+                Logger.i("Frame loss back to normal after ${degradedTicks}s")
+                degradedTicks = 0
+            }
+            return false
+        }
+        degradedTicks++
+        val pct = if (arrived > 0) lost * 100 / arrived else 0
+
+        // Step 1, cheap: rebuild the decoder. Most of what lands here is a codec that has stopped
+        // handing back input buffers, and a fresh one costs about a second of picture.
+        if (degradedTicks == DEGRADED_REBUILD_TICKS) {
+            Logger.w("Losing $pct% of frames for ${degradedTicks}s — rebuilding the decoder")
+            StreamStats.watchdogRecoveries++
+            StreamStats.watchdogLastReason = "frame loss $pct%"
+            StreamStats.watchdogLastMs = nowMs
+            forceRebuild = true
+            return true
+        }
+
+        // Step 2, drastic: recycle the whole session, which is what stopping and restarting the
+        // share does by hand. Only after the rebuild has been tried and has not helped.
+        if (degradedTicks >= DEGRADED_RECYCLE_TICKS &&
+            nowMs - lastRecycleMs >= RECYCLE_MIN_INTERVAL_MS
+        ) {
+            lastRecycleMs = nowMs
+            degradedTicks = 0
+            StreamStats.watchdogRecoveries++
+            StreamStats.watchdogLastReason = "session recycled ($pct% loss)"
+            StreamStats.watchdogLastMs = nowMs
+            Logger.w("Still losing $pct% of frames after a decoder rebuild — ending the session so " +
+                "the sender re-establishes it (the automatic equivalent of stopping and restarting " +
+                "the share)")
+            onStreamDead()
+            return true
+        }
+        return true
     }
 
     // ─── Decoder thread: consume the queue; the only thread that touches the decoder ──────────
@@ -686,7 +783,7 @@ class MirrorStreamServer(
         decoderRebuilds++
         decoder = VideoDecoder(surface).also { it.initialize(sc + sps, sc + pps, width, height) }
         awaitingKeyframe = true                                // a fresh decoder must start at an IDR
-        StreamStats.videoRes = "${width}x${height}"
+        StreamStats.videoAdvertised = "${width}x${height}"
         publishDecoderState()
         Logger.i("Mirror decoder (re)built for surface (sps=${sps.size}B pps=${pps.size}B)")
     }
@@ -869,6 +966,17 @@ class MirrorStreamServer(
         private const val FRAME_POOL_CAPACITY = 8
 
         /**
+         * Largest frame the pool will hold a buffer for, and therefore the ceiling on what it costs:
+         * [FRAME_POOL_CAPACITY] × this, so 4 MB worst case.
+         *
+         * Comfortably above a real 1080p mirroring frame — predicted frames run tens of kilobytes
+         * and even a keyframe is typically 100–300 KB — so in practice nothing exceeds it and every
+         * frame is pooled. Anything that does is a one-off array, which costs a single allocation
+         * rather than permanently re-cutting all eight buffers to its size.
+         */
+        private const val POOLED_FRAME_LIMIT = 512 * 1024
+
+        /**
          * How long the decoder will skip frames waiting for a keyframe before giving up and
          * decoding whatever arrives.
          *
@@ -954,6 +1062,52 @@ class MirrorStreamServer(
 
         /** Watchdog tick. Slow — this is a stall detector, not a scheduler. */
         private const val WATCHDOG_INTERVAL_MS = 1_000L
+
+        /**
+         * Frames that must arrive in one tick before loss is judged at all.
+         *
+         * Below this the sample is too small to mean anything, and iOS legitimately sends almost
+         * nothing when the screen is static — where one unlucky dropped frame out of three would
+         * read as 33% loss and escalate against a session that is perfectly healthy and simply idle.
+         */
+        private const val MIN_ARRIVALS_TO_JUDGE = 10
+
+        /** Fraction of arriving frames destroyed, in one tick, for that tick to count as degraded. */
+        private const val DEGRADED_LOSS_PCT = 20
+
+        /** Consecutive degraded seconds before the cheap remedy: rebuild the decoder. */
+        private const val DEGRADED_REBUILD_TICKS = 5
+
+        /** Consecutive degraded seconds before the drastic one: recycle the whole session. */
+        private const val DEGRADED_RECYCLE_TICKS = 15
+
+        /**
+         * Floor on how often a session may be recycled.
+         *
+         * A recycle costs a visible reconnection, so on a link that is genuinely too poor to carry
+         * the stream this has to settle into "degraded picture" rather than a reconnect loop — which
+         * would be strictly worse than the problem it is treating. One minute is long enough that a
+         * user sees at most a brief interruption, and short enough to still rescue a session that
+         * went bad early in a long cast.
+         */
+        private const val RECYCLE_MIN_INTERVAL_MS = 60_000L
+
+        /**
+         * Whether one watchdog tick's worth of traffic counts as degraded.
+         *
+         * Pure, `internal` and in the companion so the escalation policy is unit-testable without a
+         * socket or a codec — the same treatment [isStalled] and [waitBudgetMs] get, and for the
+         * same reason: its failure mode (tearing down a healthy session) is destructive and cannot
+         * be staged on a TV.
+         *
+         * @param arrived frames received in this tick.
+         * @param lost of those, how many were shed at the queue or refused by the decoder.
+         */
+        internal fun isLosingFrames(arrived: Int, lost: Int): Boolean {
+            if (arrived < MIN_ARRIVALS_TO_JUDGE) return false
+            if (lost <= 0) return false
+            return lost * 100 >= arrived * DEGRADED_LOSS_PCT
+        }
 
         /**
          * Grace period after the data connection drops before the session is declared dead.

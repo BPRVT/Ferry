@@ -11,6 +11,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.1.0] - 2026-08-06
+
+Reported straight off 7.0.0: it froze completely and then crashed. And two
+observations that were worth more than the crash itself — **stopping and restarting
+the share acts like a fresh slate**, and the audio boost is on by default at +12 dB.
+
+### Fixed
+
+- **Ferry had no crash handling of any kind.** A freeze followed by a crash is the
+  signature of an ANR, and Android writes that evidence to logcat and `/data/anr/` —
+  two places nobody can reach on a TV stick with no adb. So the most important failure
+  Ferry has was also the one that left the least behind, and every fix aimed at it,
+  including the ones in 7.0.0, was reasoned rather than diagnosed.
+
+  `CrashReporter` now catches the uncaught exception and writes the stack **plus a
+  snapshot of what the video and audio pipeline were doing** to app-private storage —
+  the stack says where it died, the counters say what it was in the middle of, and for
+  this codebase the second has repeatedly been the more useful half. `MainThreadWatchdog`
+  posts a heartbeat to the main thread every second and, after four seconds without an
+  answer, captures **that thread's** stack while it is still stuck. `DiagnosticScreen`
+  puts whichever it was on the television at the next launch.
+
+  Nothing is uploaded anywhere. The report is app-private and overwritten by the next one.
+
+- **The audio boost retried itself ~92 times a second whenever it failed to attach.**
+  `LoudnessBoost.sync` is called once per audio packet, on the explicit promise that it
+  costs nothing unless the request changed — and its early return compares the applied
+  gain against the requested one, which a failure leaves permanently unequal. So a device
+  that refused the effect got a `LoudnessEnhancer` construction, a binder call into
+  audioserver, an exception and a log line for every packet, for the rest of the session,
+  on the one thread where a stall is audible.
+
+  Unreachable at 0 dB, because there the two agree. **Only users who turned the boost on
+  were ever exposed to it.** The gain itself costs nothing — it runs in the audio HAL, not
+  on Ferry's playback thread.
+
+- **The overlay reported the resolution Ferry asked for, not the one it got.** The
+  advertised size is a request in the AirPlay `/info` record and the sender decides whether
+  to honour it, so a resolution setting the sender declined still read as though it had
+  applied. It now shows what is actually being decoded, and names the disagreement when
+  there is one: `1920x1080 (asked 1280x720)`.
+
+### Added
+
+- **Automatic mid-session recovery.** Ferry now watches the rate at which frames are
+  actually destroyed — shed at the queue or refused by the decoder — and escalates when it
+  stays bad: a decoder rebuild after five seconds above 20% loss, and after fifteen, ending
+  the RTSP session so the sender re-establishes it.
+
+  That second step is the automatic equivalent of stopping and restarting the share by
+  hand, which is exactly the workaround that was reported to work. Rate-limited to one a
+  minute, so a link that is genuinely too poor settles into a degraded picture rather than a
+  reconnect loop — which would be worse than the problem. Render skips are deliberately not
+  counted as loss: those are the pacing rule working correctly, and confusing the two would
+  recycle healthy sessions at high frame rates.
+
+- **A 720p option** (Settings → *Smoother playback*). Off by default; 1080p stays the
+  default and looks better.
+
+  The only setting in Ferry that reduces work at the **source**. Everything else tunes how
+  the receiver copes with what it is sent; this changes what it is sent — a quarter fewer
+  pixels than 1080p means a lower bitrate over the Wi-Fi, fewer macroblocks to decode and
+  less to push to the panel, all at once. The network half matters most on a marginal link,
+  because it is the one Ferry can otherwise do nothing about. Mutually exclusive with the
+  1440p option.
+
+### Changed
+
+- The MediaCodec callback thread runs at urgent-display priority. It is not a bookkeeping
+  thread — it is the thread that renders every frame Ferry displays, and a buffer it fails
+  to hand back promptly is a buffer the codec cannot reuse, which is the output-side jam
+  that starves the input side and destroys frames.
+- The audio receive path deduplicates **before** copying. macOS sends every realtime-audio
+  packet 2–3× for redundancy, so two thirds of those copies existed only to be discarded a
+  line later. Also reuses the PCM staging buffer and `BufferInfo` instead of allocating both
+  per decoded frame.
+- The frame pool added in 7.0.0 is bounded at 512 KB a buffer. Without a ceiling, one freak
+  oversized frame permanently re-cut all eight buffers to its size.
+
+---
+
 ## [7.0.0] - 2026-08-06
 
 Every release up to here fixed something that broke. This one fixes something that

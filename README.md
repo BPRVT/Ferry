@@ -43,8 +43,9 @@ worth naming:
 | Area | Change |
 |---|---|
 | **Screensaver** | The Fire TV screensaver no longer interrupts an active session. This is why the project exists. [Details below.](#the-screensaver-fix) |
+| **Self-recovery** | A stall watchdog, automatic decoder rebuilds, and — when sustained frame loss survives that — recycling the session so the sender re-establishes it. Crashes and main-thread freezes are recorded and shown on the TV at the next launch, because the device has no adb. |
 | **Video pipeline** | Asynchronous MediaCodec decode, realtime codec priority, low-latency mode, dedicated display-priority threads, a shallow bounded frame queue that sheds non-reference frames first, in-place AVCC→Annex-B conversion, and pooled buffers on both sides of the decrypt. Latency and GC pressure, both reduced deliberately. |
-| **Picture** | Smart fill (crop a capped slice instead of showing black bars), optional 1440p advertisement for sharper text. |
+| **Picture** | Smart fill (crop a capped slice instead of showing black bars), and a resolution choice — 720p for smoothness, 1080p, or 1440p for sharper text. |
 | **Audio** | Correct dB→amplitude volume mapping, volume on the legacy RAOP path, and an optional compressing loudness boost for quiet sources. |
 | **AirPlay modes** | "Always mirror the screen" — withholds the video-URL capability bit so senders stop popping out into their own player. |
 | **Security** | Hardened LAN-facing parsers (RTSP reader stack overflow, unbounded FU-A reassembly, config-frame bounds), SRP PIN pairing with a persistent lockout, scoped-down location permissions. |
@@ -96,7 +97,7 @@ Network**.
 
 ```bash
 adb connect 192.168.1.42:5555
-adb install -r ferry-v7.0.0-firetv.apk
+adb install -r ferry-v7.1.0-firetv.apk
 ```
 
 Accept the authorization prompt on the TV the first time. Then launch **Ferry** from the

@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var photoScreen: PhotoScreen
     private lateinit var nowPlayingScreen: NowPlayingScreen
     private lateinit var pinScreen: PinScreen
+    private lateinit var diagnosticScreen: com.ferry.receiver.ui.DiagnosticScreen
 
     // Service binding — gives access to state flows for showing/hiding the streaming overlay
     private var service: FerryService? = null
@@ -194,13 +195,35 @@ class MainActivity : AppCompatActivity() {
         photoScreen = PhotoScreen(this)
         nowPlayingScreen = NowPlayingScreen(this)
         pinScreen = PinScreen(this)
+        diagnosticScreen = com.ferry.receiver.ui.DiagnosticScreen(this)
         streamingContainer.addView(streamingScreen)
         streamingContainer.addView(photoScreen)
         streamingContainer.addView(nowPlayingScreen)
         streamingContainer.addView(pinScreen)
+        // Added last so it sits above every other overlay: if Ferry died, that is the first thing
+        // the user needs to see, ahead of any stream that reconnects while they are reading it.
+        streamingContainer.addView(diagnosticScreen)
         photoScreen.visibility = View.GONE
         nowPlayingScreen.visibility = View.GONE
         pinScreen.visibility = View.GONE
+        diagnosticScreen.visibility = View.GONE
+        showLastCrashIfAny()
+    }
+
+    /**
+     * Puts the previous run's crash or freeze report on screen, if there was one.
+     *
+     * This is the entire delivery mechanism for that evidence. Ferry runs on a TV with no adb, so a
+     * report that is not shown here is one nobody will ever read — see
+     * [com.ferry.receiver.util.CrashReporter]. Cleared when the user dismisses it in [onKeyDown], so
+     * it is shown once and never nags.
+     */
+    private fun showLastCrashIfAny() {
+        val report = com.ferry.receiver.util.CrashReporter.read() ?: return
+        com.ferry.receiver.util.Logger.w("Previous run ended abnormally — showing the report")
+        diagnosticScreen.show(report)
+        diagnosticScreen.visibility = View.VISIBLE
+        streamingContainer.visibility = View.VISIBLE
     }
 
     /**
@@ -317,6 +340,14 @@ class MainActivity : AppCompatActivity() {
      * false for other keys so normal navigation is unaffected.
      */
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        // A crash report is dismissed by anything at all, and swallows that keypress. It is shown
+        // in front of someone who came here to cast; making them hunt for the right button would be
+        // its own small insult on top of the crash.
+        if (diagnosticScreen.visibility == View.VISIBLE) {
+            diagnosticScreen.visibility = View.GONE
+            com.ferry.receiver.util.CrashReporter.clear()
+            return true
+        }
         val overlayActive = currentNowPlaying != null || currentAirPlayState == ProtocolState.CONNECTED
         if (overlayActive) {
             val command = when (keyCode) {

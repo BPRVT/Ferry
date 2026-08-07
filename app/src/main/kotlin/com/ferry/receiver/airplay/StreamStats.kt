@@ -38,7 +38,18 @@ object StreamStats {
     @Volatile var audioBoostDb = 0
 
     // ─── Video (MirrorStreamServer) ──────────────────────────────────────────
-    @Volatile var videoRes = ""        // e.g. "1920x1080"
+    /**
+     * The size Ferry **advertised** to the sender — what the resolution setting asked for, not what
+     * arrived. e.g. "1920x1080".
+     *
+     * Kept separate from [videoWidth]/[videoHeight], which are what the decoder is actually
+     * producing, because the two can disagree and the disagreement is the whole point: the
+     * advertised size is a *request*, and a sender is free to ignore it. The HUD used to show only
+     * this one, labelled as if it were the truth — so a 720p setting that the sender declined would
+     * still have read "1280x720" on screen, which is precisely the reading that would send someone
+     * looking for a picture-quality difference that was never applied.
+     */
+    @Volatile var videoAdvertised = ""
     @Volatile var videoFps = 0         // frames/sec over the last sample window
     @Volatile var videoQueue = 0       // current decode-queue depth
     @Volatile var videoQueueCapacity = 0  // …out of this many, so "q 15/16" reads as nearly full
@@ -155,7 +166,7 @@ object StreamStats {
 
     /** Clears per-stream counters (call when a mirror session ends). Keeps [overlayEnabled]. */
     fun resetStreams() {
-        videoRes = ""; videoFps = 0; videoQueue = 0; videoQueueCapacity = 0; videoDropPct = 0
+        videoAdvertised = ""; videoFps = 0; videoQueue = 0; videoQueueCapacity = 0; videoDropPct = 0
         videoDecoderDrops = 0; videoKeyframeDrops = 0; videoRenderSkips = 0
         videoLastArrivalMs = 0L; videoLastShownMs = 0L; videoShown = 0; decoderState = ""; videoLinkUp = false
         watchdogRecoveries = 0; watchdogLastReason = ""; watchdogLastMs = 0L
@@ -180,6 +191,26 @@ object StreamStats {
      * enough that a stopped stream reads as stopped rather than as whatever it was last managing.
      */
     private const val FPS_STALE_MS = 2_000L
+
+    /**
+     * What the VIDEO line says about resolution: what is actually being decoded, and — only when
+     * they disagree — what Ferry asked for.
+     *
+     * This is how the resolution setting is verified from the couch. The advertised size is a
+     * request in the AirPlay `/info` `displays` record, and the sender decides whether to honour it;
+     * showing only the request would report success whether or not anything changed. So a 720p
+     * setting that took reads `1280x720`, and one the sender declined reads
+     * `1920x1080 (asked 1280x720)` — which names the problem instead of hiding it.
+     *
+     * Falls back to the advertised size before the first frame has been decoded, when it is the only
+     * thing known.
+     */
+    internal fun resolution(): String {
+        if (videoWidth <= 0 || videoHeight <= 0) return videoAdvertised.ifEmpty { "—" }
+        val actual = "${videoWidth}x$videoHeight"
+        return if (videoAdvertised.isEmpty() || videoAdvertised == actual) actual
+               else "$actual (asked $videoAdvertised)"
+    }
 
     internal fun ageString(thenMs: Long, nowMs: Long = System.currentTimeMillis()): String {
         if (thenMs <= 0L) return "—"
@@ -224,7 +255,7 @@ object StreamStats {
         val fps = if (videoLastArrivalMs > 0L && now - videoLastArrivalMs > FPS_STALE_MS) 0 else videoFps
 
         return "Ferry · debug\n" +
-            "VIDEO  ${videoRes.ifEmpty { "—" }}  ${fps}fps  q $queue  $arrivalLabel ${ageString(videoLastArrivalMs, now)}\n" +
+            "VIDEO  ${resolution()}  ${fps}fps  q $queue  $arrivalLabel ${ageString(videoLastArrivalMs, now)}\n" +
             "DEC    ${decoderState.ifEmpty { "—" }}  drops $videoDecoderDrops  kf $videoKeyframeDrops  qdrop ${videoDropPct}%\n" +
             "SHOW   $videoShown  skip $videoRenderSkips  last ${ageString(videoLastShownMs, now)}  ${displayRefreshHz.toInt()}Hz\n" +
             "AUDIO  " + (if (audioActive) {
