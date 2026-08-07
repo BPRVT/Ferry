@@ -65,6 +65,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var nowPlayingScreen: NowPlayingScreen
     private lateinit var pinScreen: PinScreen
     private lateinit var diagnosticScreen: com.ferry.receiver.ui.DiagnosticScreen
+    private var diagnosticServer: com.ferry.receiver.util.DiagnosticServer? = null
 
     // Service binding — gives access to state flows for showing/hiding the streaming overlay
     private var service: FerryService? = null
@@ -158,6 +159,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        // The diagnostics endpoint must never outlive the screen that advertised it.
+        diagnosticServer?.stop()
+        diagnosticServer = null
         // A user-initiated exit (Back out of the app) should end any active mirror — closing the
         // service stops the receiver, which drops the RTSP connection so the sender stops mirroring
         // too. isFinishing distinguishes a real exit from a config-change recreation (where the
@@ -221,9 +225,21 @@ class MainActivity : AppCompatActivity() {
     private fun showLastCrashIfAny() {
         val report = com.ferry.receiver.util.CrashReporter.read() ?: return
         com.ferry.receiver.util.Logger.w("Previous run ended abnormally — showing the report")
-        diagnosticScreen.show(report)
+        // Serve the same text over the LAN while the screen is up, so it can be copied rather than
+        // transcribed from a photograph. Stopped when the report is dismissed, and by its own
+        // timeout regardless — see DiagnosticServer.
+        diagnosticServer = com.ferry.receiver.util.DiagnosticServer { report }
+        diagnosticScreen.show(report, diagnosticServer?.start())
         diagnosticScreen.visibility = View.VISIBLE
         streamingContainer.visibility = View.VISIBLE
+    }
+
+    /** Closes the report and the LAN endpoint that was serving it. */
+    private fun dismissDiagnostics() {
+        diagnosticScreen.visibility = View.GONE
+        diagnosticServer?.stop()
+        diagnosticServer = null
+        com.ferry.receiver.util.CrashReporter.clear()
     }
 
     /**
@@ -344,8 +360,7 @@ class MainActivity : AppCompatActivity() {
         // in front of someone who came here to cast; making them hunt for the right button would be
         // its own small insult on top of the crash.
         if (diagnosticScreen.visibility == View.VISIBLE) {
-            diagnosticScreen.visibility = View.GONE
-            com.ferry.receiver.util.CrashReporter.clear()
+            dismissDiagnostics()
             return true
         }
         val overlayActive = currentNowPlaying != null || currentAirPlayState == ProtocolState.CONNECTED

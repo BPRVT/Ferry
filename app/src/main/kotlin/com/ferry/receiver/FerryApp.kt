@@ -25,6 +25,9 @@ class FerryApp : Application() {
         // Before anything else that could throw. Ferry runs on a TV with no adb, so a crash that is
         // not recorded here leaves no evidence at all — see [CrashReporter].
         com.ferry.receiver.util.CrashReporter.install(this)
+        // Memory-only, and planted in release too. It never touches logcat, so the reason release
+        // plants no other tree still holds — see [LogRing].
+        com.ferry.receiver.util.LogRing.install()
     }
 
     /**

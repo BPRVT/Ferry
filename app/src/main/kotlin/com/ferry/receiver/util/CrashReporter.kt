@@ -109,6 +109,11 @@ object CrashReporter {
         appendLine(runCatching { StreamStats.summary() }.getOrElse { "(stats unavailable)" })
         appendLine()
         appendLine(detail)
+        appendLine()
+        // What led up to it. The stack names the instruction that failed; these name the sequence,
+        // and in this codebase the sequence has repeatedly been the half that identified the bug.
+        appendLine("─── recent log ───")
+        appendLine(runCatching { LogRing.snapshot() }.getOrElse { "(log unavailable)" })
     }
 
     private fun stackOf(error: Throwable): String = StringWriter().also { sw ->

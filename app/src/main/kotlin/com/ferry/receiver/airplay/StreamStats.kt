@@ -208,8 +208,30 @@ object StreamStats {
     internal fun resolution(): String {
         if (videoWidth <= 0 || videoHeight <= 0) return videoAdvertised.ifEmpty { "—" }
         val actual = "${videoWidth}x$videoHeight"
-        return if (videoAdvertised.isEmpty() || videoAdvertised == actual) actual
-               else "$actual (asked $videoAdvertised)"
+        if (videoAdvertised.isEmpty() || honoured(videoWidth, videoHeight, videoAdvertised)) return actual
+        return "$actual (asked $videoAdvertised)"
+    }
+
+    /**
+     * Whether [w]x[h] is a sender honouring an advertised size of [advertised].
+     *
+     * **The advertised size is a bounding box, not an exact demand**, and getting this wrong is worse
+     * than not showing it at all. A sender scales its own screen to fit what the receiver offers and
+     * keeps its own aspect ratio, so an iPad told "1280x720" sends **1046x720** — its 4:3-ish panel
+     * fitted to that height. That is the request being honoured exactly as intended, and an
+     * equality check calls it a refusal, sending the user to look for a setting that did not apply
+     * when in fact it did. Reported from hardware against 7.1.0.
+     *
+     * So the test is containment, not equality — and orientation-independent, because a phone
+     * mirroring in portrait swaps the axes while still fitting the same box. A genuine refusal is a
+     * sender that comes back *larger* than what it was offered, which containment catches and
+     * equality drowns in false alarms.
+     */
+    private fun honoured(w: Int, h: Int, advertised: String): Boolean {
+        val parts = advertised.split('x')
+        val aw = parts.getOrNull(0)?.toIntOrNull() ?: return true
+        val ah = parts.getOrNull(1)?.toIntOrNull() ?: return true
+        return maxOf(w, h) <= maxOf(aw, ah) && minOf(w, h) <= minOf(aw, ah)
     }
 
     internal fun ageString(thenMs: Long, nowMs: Long = System.currentTimeMillis()): String {

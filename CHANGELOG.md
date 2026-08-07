@@ -11,6 +11,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.2.0] - 2026-08-06
+
+Getting the evidence off the television, and a correction to 7.1.0's resolution readout.
+
+### Added
+
+- **Crash and freeze reports can be fetched over the LAN.** The diagnostics screen now
+  serves the same text at a `http://<tv-ip>:<port>/` address shown on screen, so it can be
+  opened on a phone or laptop and copied as selectable text. A stack trace photographed off
+  a TV is transcribable in theory and miserable in practice.
+
+  **Nothing is uploaded anywhere.** Ferry has no internet permission beyond the LAN it
+  mirrors over, no account and no third-party service, and none of that changes for the
+  convenience of a bug report — the device serves the file, the user decides who sees it.
+  The server runs only while the report is on screen, binds an OS-assigned port, is
+  read-only, serves exactly one document, and stops itself after fifteen minutes regardless.
+
+- **Reports now carry the last 300 log lines**, not just the stack. The stack names the
+  instruction that failed; the log names the sequence — that the decoder had been rebuilt
+  four times in the preceding ten seconds, or that the data connection dropped just before.
+  In this codebase the sequence has repeatedly been the half that identified the bug.
+
+  Kept in memory in a ring buffer, never written to disk on its own, and capped at INFO and
+  above. It is planted in release builds too, which is safe precisely because it does not
+  touch logcat: the reason release plants no other tree — keeping Ferry's detail out of a
+  log any app on the device can read — is preserved.
+
+### Fixed
+
+- **The resolution readout called a working 720p setting a failure.** Reported from
+  hardware: an iPad told `1280x720` sends **1046x720**, because a sender scales its own
+  screen to fit the box it is offered and keeps its own aspect ratio. 7.1.0 compared the
+  two for equality, so the honoured request read as `1046x720 (asked 1280x720)` — which
+  says the setting did not apply, about a setting that applied exactly as designed.
+
+  The advertised size is a bounding box, not an exact demand. The check is now containment,
+  and orientation-independent so a phone mirroring in portrait is not flagged either. A
+  genuine refusal — a sender coming back *larger* than the box — still is.
+
+---
+
 ## [7.1.0] - 2026-08-06
 
 Reported straight off 7.0.0: it froze completely and then crashed. And two
