@@ -11,6 +11,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.6.0] - 2026-08-07
+
+The choppiness, and the reason no counter could see it.
+
+### Fixed
+
+- **The render pacer discarded frames the panel could have shown, and kept the wrong ones.**
+  Reported from the couch as "when it lags or falls behind it's SO choppy", and visible in a
+  captured log as an arithmetic impossibility: **51 fps arriving at a 59.94 Hz panel with 42%
+  of frames skipped.** A 51 fps stream puts frames 19.6 ms apart against a 13.4 ms threshold —
+  under even delivery nothing should ever be skipped.
+
+  It is not even delivery. Wi-Fi bunches: three frames land within a few milliseconds, then
+  nothing for 45 ms. The same log shows the audio queue going from empty to completely full in
+  about 200 ms, which is the identical burst seen from the other stream.
+
+  Against a burst, a minimum-gap rule shows the **first** frame and drops the rest — so the
+  panel holds the *oldest* image of the clump while the freshest one, already decoded and
+  sitting there, is thrown away, and then nothing changes for the length of the gap. Not fewer
+  frames decoded. Fewer frames *seen*, in clumps. Which is what choppy is.
+
+  Pacing is now a budget: display time accrues at the panel's refresh rate and is capped at
+  three frames' worth — the depth of a SurfaceView's BufferQueue. A gap banks credit and the
+  burst that follows spends it, so short bursts reach the screen in full and the newest frame
+  wins. Sustained oversupply still cannot outrun the refill rate, which is the property that
+  stops the BufferQueue saturating — the failure 6.5.0 fixed is still fixed. Mutation-tested:
+  collapsing the burst allowance to one reproduces the old behaviour and fails the new test.
+
+### Added
+
+- **`SHOW` now reports frames per second reaching the screen**, beside the count.
+
+  The number Ferry never had, and the one every complaint has actually been about. Every other
+  rate measured what *arrived*, so a pipeline that received, decoded, and then declined to
+  display two frames in three reported itself perfectly healthy while the picture juddered.
+  Read it beside the arrival rate: the two agreeing means everything received is being shown; a
+  gap between them means frames are dying at the last step, which is a different bug from any
+  drop counter moving.
+
+---
+
 ## [7.5.0] - 2026-08-06
 
 The first release driven by a log from the device instead of by reasoning about the code.

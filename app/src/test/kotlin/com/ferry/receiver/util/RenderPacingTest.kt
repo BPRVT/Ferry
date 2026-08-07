@@ -36,15 +36,17 @@ class RenderPacingTest {
      * @param arrivalsNs gaps between consecutive decoded frames.
      */
     private fun rendered(arrivalsNs: List<Long>, hz: Float): Int {
-        var lastRenderNs = 0L
-        var now = 0L
+        var credit = 0L
         var shown = 0
+        var first = true
         for (gap in arrivalsNs) {
-            now += gap
-            if (RenderPacer.isDueToRender(now, lastRenderNs, hz)) {
-                lastRenderNs = now
-                shown++
-            }
+            // The first frame of a decoder is handed a full budget, exactly as VideoDecoder does,
+            // so the picture appears without waiting out a deadline it has no basis for.
+            val elapsed = if (first) Long.MAX_VALUE / 2 else gap
+            first = false
+            val paced = RenderPacer.pace(credit, elapsed, hz)
+            credit = paced.creditNs
+            if (paced.render) shown++
         }
         return shown
     }
@@ -85,8 +87,41 @@ class RenderPacingTest {
     @Test
     fun `a tight burst is paced down instead of flooding the display`() {
         val shown = rendered(List(10) { 2_000_000L }, 60f)
-        assertTrue("a 2ms-apart burst of 10 should mostly be skipped, showed $shown", shown <= 3)
+        // The first frame plus the banked burst allowance get through; the rest of a sustained
+        // 500 fps flood must not, because that is what saturates the BufferQueue.
+        assertTrue("a 2ms-apart burst of 10 should mostly be skipped, showed $shown", shown <= 4)
         assertTrue("but never all of them skipped, showed $shown", shown >= 1)
+    }
+
+    /**
+     * **The case this whole rule was rebuilt for.** Captured on hardware: 51 fps arriving at a
+     * 59.94 Hz panel — a rate the display can show in full — with 42% of frames skipped anyway.
+     * That is impossible with even arrival, and is what bunched Wi-Fi delivery produces: a clump of
+     * frames a few milliseconds apart, then a long gap.
+     *
+     * A minimum-gap rule shows the first of each clump and discards the rest, so the panel holds the
+     * *oldest* image of the burst while the freshest one, already decoded, is thrown away — reported
+     * from the couch as "when it lags or falls behind it's SO choppy". Credit banked during the gap
+     * has to cover the clump that follows.
+     */
+    @Test
+    fun `bunched delivery below the panel rate shows every frame`() {
+        // 51 fps average, delivered as clumps of 3 about 2ms apart with the rest of the time as gap.
+        val clump = listOf(2_000_000L, 2_000_000L, 54_800_000L)
+        val arrivals = List(60) { clump }.flatten()
+        val shown = rendered(arrivals, 59.94f)
+        assertTrue(
+            "a 51fps average on a 59.94Hz panel must reach the screen in full, showed $shown of 180",
+            shown >= 175
+        )
+    }
+
+    /** A sustained flood still cannot outrun the panel — the protection 6.5.0 added must survive. */
+    @Test
+    fun `sustained oversupply is still capped near the panel rate`() {
+        // 120 fps into 60 Hz, for two seconds.
+        val shown = rendered(steady(120.0, 240), 60f)
+        assertTrue("120fps into 60Hz must not all be shown, showed $shown of 240", shown <= 160)
     }
 
     /** A 50 Hz panel (PAL-region sets) must pace against 50, not a hardcoded 60. */

@@ -75,6 +75,17 @@ object RenderPacer {
     const val MAX_PLAUSIBLE_REFRESH_HZ = 240f
 
     /**
+     * How many frames' worth of display time [pace] may bank, and therefore how long a burst can be
+     * shown in full.
+     *
+     * Three, to match the depth of a SurfaceView's BufferQueue — the thing being protected. A burst
+     * that fits in the queue is one the display will drain on its own; the failure 6.5.0 fixed needs
+     * a *sustained* excess, which the refill rate still prevents. Larger would start queueing frames
+     * behind one another again; smaller would go back to discarding frames the panel could show.
+     */
+    const val BURST_FRAMES = 3
+
+    /**
      * May a frame arriving at [nowNs] be shown, given the last shown frame was at [lastRenderNs] on
      * a [refreshHz] panel?
      *
@@ -86,6 +97,56 @@ object RenderPacer {
         if (lastRenderNs == 0L) return true
         return nowNs - lastRenderNs >= minRenderIntervalNs(refreshHz)
     }
+
+    /**
+     * Credit-based pacing: what [isDueToRender] should have been.
+     *
+     * ── Why the simple rule was wrong ──
+     *
+     * [isDueToRender] enforces a minimum gap between *consecutive shown frames*, which silently
+     * assumes frames arrive evenly. Over Wi-Fi they do not. A real capture showed 51 fps arriving at
+     * a 59.94 Hz panel — a rate the display can show in full, with room to spare — and **42% of
+     * frames skipped anyway**. That is arithmetically impossible with even arrival (frames would be
+     * 19.6 ms apart against a 13.4 ms threshold) and is exactly what bunched delivery produces: three
+     * frames land within a few milliseconds, then nothing for 45 ms. The same capture showed the
+     * audio queue going from empty to completely full in about 200 ms, which is the same burst seen
+     * from the other stream.
+     *
+     * Against a burst, a minimum-gap rule shows the **first** frame and discards the rest — so the
+     * panel holds the *oldest* image of the burst while the freshest one, already decoded and ready,
+     * is thrown away. Then nothing changes for the length of the gap. Reported from the couch as
+     * "when it lags or falls behind it's SO choppy", which is precisely what that produces: not
+     * fewer frames decoded, but fewer frames *seen*, in clumps.
+     *
+     * ── The rule ──
+     *
+     * Display time accrues as a budget at the panel's refresh rate, capped at [BURST_FRAMES]
+     * frames' worth. Showing a frame spends one frame's worth. So:
+     *
+     *  - a gap **banks** credit, and the burst that follows spends it — every frame of a short burst
+     *    reaches the screen, and the newest one ends up displayed,
+     *  - **sustained** oversupply cannot outrun the refill rate, so the average never exceeds the
+     *    panel's, which is the property that stops the BufferQueue saturating. That saturation is
+     *    real and is what 6.5.0 fixed; this preserves the protection and drops the collateral damage.
+     *
+     * The cap is what keeps it honest: without it, a long idle period would bank unlimited credit and
+     * the next burst would flood the display exactly as before.
+     *
+     * @param creditNs display time banked so far. 0 on a fresh decoder.
+     * @param elapsedNs time since this was last called; the first call should pass one frame interval
+     *   or more so the first frame is always shown.
+     * @return the decision, and the credit to carry forward.
+     */
+    fun pace(creditNs: Long, elapsedNs: Long, refreshHz: Float): Paced {
+        val interval = minRenderIntervalNs(refreshHz)
+        val ceiling = interval * BURST_FRAMES
+        val banked = (creditNs + elapsedNs.coerceAtLeast(0L)).coerceAtMost(ceiling)
+        return if (banked >= interval) Paced(render = true, creditNs = banked - interval)
+               else Paced(render = false, creditNs = banked)
+    }
+
+    /** The outcome of [pace]: whether to show this frame, and the credit to carry forward. */
+    data class Paced(val render: Boolean, val creditNs: Long)
 
     /** One display refresh interval, minus [RENDER_INTERVAL_TOLERANCE], in nanoseconds. */
     fun minRenderIntervalNs(refreshHz: Float): Long {

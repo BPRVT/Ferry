@@ -88,6 +88,15 @@ class VideoDecoder(private val outputSurface: Surface) {
     private var lastRenderNs = 0L
 
     /**
+     * Banked display time, in nanoseconds — see [RenderPacer.pace].
+     *
+     * Confined to [callbackThread] alongside [lastRenderNs], and per-decoder for the same reason: a
+     * rebuilt decoder is drawing to a new Surface and must not inherit a budget earned against the
+     * old one.
+     */
+    private var renderCreditNs = 0L
+
+    /**
      * Async-mode callbacks. The important one is [onOutputBufferAvailable]: it renders each frame
      * the moment the codec finishes it, on the codec's own thread.
      *
@@ -413,9 +422,13 @@ class VideoDecoder(private val outputSurface: Surface) {
      */
     private fun shouldRender(): Boolean {
         val now = System.nanoTime()
-        if (!RenderPacer.isDueToRender(now, lastRenderNs, StreamStats.displayRefreshHz)) return false
+        // First frame of a decoder: hand it a full burst of credit so it is shown immediately and
+        // the picture appears without waiting out a deadline it has no basis for.
+        val elapsed = if (lastRenderNs == 0L) Long.MAX_VALUE / 2 else now - lastRenderNs
         lastRenderNs = now
-        return true
+        val paced = RenderPacer.pace(renderCreditNs, elapsed, StreamStats.displayRefreshHz)
+        renderCreditNs = paced.creditNs
+        return paced.render
     }
 
     /** Reads the decoder's true display size (honouring the crop rectangle) for StreamingScreen. */

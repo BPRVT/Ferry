@@ -84,6 +84,21 @@ object StreamStats {
      */
     @Volatile var videoShown = 0
 
+    /**
+     * Frames actually reaching the screen, per second.
+     *
+     * **The number Ferry never had, and the one the complaint was always about.** Every other rate
+     * here measures what *arrives* — `videoFps` counts frames off the socket — so a pipeline that
+     * received, decoded and then declined to display two frames in three reported itself perfectly
+     * healthy while the picture juddered. "Laggy" is a statement about frames *seen*, and nothing
+     * measured that.
+     *
+     * Read beside [videoFps]: the two agreeing means everything received is being shown, and a large
+     * gap between them means frames are dying at the last step, which is a completely different bug
+     * from any drop counter moving.
+     */
+    @Volatile var videoShownFps = 0
+
     /** Human-readable decoder state: "ok", "none", "rebuild xN". Blank before a session starts. */
     @Volatile var decoderState = ""
 
@@ -180,7 +195,7 @@ object StreamStats {
     fun resetStreams() {
         videoAdvertised = ""; videoFps = 0; videoQueue = 0; videoQueueCapacity = 0; videoDropPct = 0
         videoDecoderDrops = 0; videoKeyframeDrops = 0; videoRenderSkips = 0
-        videoLastArrivalMs = 0L; videoLastShownMs = 0L; videoShown = 0; decoderState = ""; videoLinkUp = false
+        videoLastArrivalMs = 0L; videoLastShownMs = 0L; videoShown = 0; videoShownFps = 0; decoderState = ""; videoLinkUp = false
         watchdogRecoveries = 0; watchdogLastReason = ""; watchdogLastMs = 0L
         videoWidth = 0; videoHeight = 0
         audioActive = false; audioQueue = 0; audioDupPct = 0; audioCatchUp = false
@@ -288,11 +303,14 @@ object StreamStats {
         // measured — a frozen picture next to a confident "31fps", which is precisely the reading
         // that talked me out of the right diagnosis once already.
         val fps = if (videoLastArrivalMs > 0L && now - videoLastArrivalMs > FPS_STALE_MS) 0 else videoFps
+        // Same staleness rule for the displayed rate: a frozen picture beside a confident
+        // "28/s" is the reading that talks people out of the right diagnosis.
+        val shownFps = if (videoLastShownMs > 0L && now - videoLastShownMs > FPS_STALE_MS) 0 else videoShownFps
 
         return "Ferry · debug\n" +
             "VIDEO  ${resolution()}  ${fps}fps  q $queue  $arrivalLabel ${ageString(videoLastArrivalMs, now)}\n" +
             "DEC    ${decoderState.ifEmpty { "—" }}  drops $videoDecoderDrops  kf $videoKeyframeDrops  qdrop ${videoDropPct}%\n" +
-            "SHOW   $videoShown  skip $videoRenderSkips  last ${ageString(videoLastShownMs, now)}  ${displayRefreshHz.toInt()}Hz\n" +
+            "SHOW   $videoShown  ${shownFps}/s  skip $videoRenderSkips  last ${ageString(videoLastShownMs, now)}  ${displayRefreshHz.toInt()}Hz\n" +
             "AUDIO  " + (if (audioActive) {
                 "on  q $audioQueue  dup ${audioDupPct}%" + (if (audioCatchUp) "  sync↓" else "")
             } else "off") +

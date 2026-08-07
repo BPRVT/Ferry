@@ -212,6 +212,7 @@ class MirrorStreamServer(
     // "poor picture" rather than "a session that restarts every ten seconds", which would be worse
     // than the problem.
     private var lastFramesIn = 0
+    private var lastFramesShown = 0
     private var lastFramesLost = 0
     private var degradedTicks = 0
     private var lastRecycleMs = 0L
@@ -574,6 +575,12 @@ class MirrorStreamServer(
                 releaseIdleDecoder = true
                 continue
             }
+
+            // The displayed frame rate, sampled on the same one-second tick as everything else.
+            // See StreamStats.videoShownFps for why this is the number that was missing.
+            val shownNow = StreamStats.videoShown
+            StreamStats.videoShownFps = (shownNow - lastFramesShown).coerceAtLeast(0)
+            lastFramesShown = shownNow
 
             // Rule 1c: the pipeline is losing frames steadily. Escalate — rebuild, then recycle.
             if (checkSustainedLoss(now)) continue
