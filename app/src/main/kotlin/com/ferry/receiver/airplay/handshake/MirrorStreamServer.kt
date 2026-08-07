@@ -523,6 +523,34 @@ class MirrorStreamServer(
                 continue
             }
 
+            // Rule 1a: both halves of the session have gone quiet while the socket is still open.
+            //
+            // **This is the failure that was captured on hardware.** The picture froze, the iPad went
+            // on playing, and Ferry sat there for twelve seconds until the user gave up and closed
+            // it. Neither existing rule could fire: the data socket never closed, so [isStreamDead]
+            // saw nothing wrong, and [isStalled] deliberately refuses to judge when no frames are
+            // arriving — because iOS sends video only on change, and a paused iPad is indistinguishable
+            // from a dead link if video is all you look at.
+            //
+            // Audio breaks that tie, and it is the signal Ferry has always had and never used.
+            // Realtime mirroring audio is not event-driven: it runs at a constant ~92 packets a
+            // second for as long as the session lives. In the captured log both streams stopped
+            // within a second of each other and never came back. A realtime stream that goes silent
+            // is not idling — it is gone.
+            if (Companion.isSessionSilent(now, StreamStats.audioLastArrivalMs, StreamStats.videoLastArrivalMs)) {
+                if (!streamDeathReported) {
+                    streamDeathReported = true
+                    StreamStats.watchdogRecoveries++
+                    StreamStats.watchdogLastReason = "session went silent"
+                    StreamStats.watchdogLastMs = now
+                    Logger.w("Watchdog: no audio for ${(now - StreamStats.audioLastArrivalMs)}ms and no " +
+                        "video for ${(now - StreamStats.videoLastArrivalMs)}ms, with the socket still " +
+                        "open — ending the session so the sender re-establishes it")
+                    onStreamDead()
+                }
+                continue
+            }
+
             // Rule 1b: there is no Surface to draw to, so give the hardware decoder back.
             //
             // A MediaCodec is not an in-process object — it is one of a handful of AVC decoder
@@ -1144,6 +1172,40 @@ class MirrorStreamServer(
             if (!everConnected || dataConnected) return false
             if (dataClosedAtMs <= 0L) return false
             return nowMs - dataClosedAtMs >= LINK_DEAD_GRACE_MS
+        }
+
+        /**
+         * How long both streams must be silent before the session counts as dead.
+         *
+         * Generous, because the cost of being wrong is a visible reconnection. Realtime audio arrives
+         * about ninety times a second, so eight seconds of nothing is roughly seven hundred missing
+         * packets — not jitter, not a hiccup, and not a link that is coming back. The user in the
+         * captured incident waited twelve seconds before giving up, so this recovers the session
+         * before a person would have reached for the remote.
+         */
+        private const val SESSION_SILENT_MS = 8_000L
+
+        /**
+         * Whether **both** halves of the session have gone quiet, with the socket still open.
+         *
+         * Requires audio to have arrived at least once ([audioLastArrivalMs] non-zero). That is the
+         * guard that keeps this honest: with no audio stream there is no heartbeat, video silence
+         * alone means nothing, and this must return false rather than guess. It is exactly the
+         * ambiguity that made a timeout unusable in 6.7.0 — the difference now is that audio supplies
+         * the missing half, not that the reasoning about video changed.
+         *
+         * Pure, `internal` and in the companion for the same reason as [isStalled] and
+         * [isStreamDead]: it tears down live sessions, so it must be testable without a TV.
+         */
+        internal fun isSessionSilent(
+            nowMs: Long,
+            audioLastArrivalMs: Long,
+            videoLastArrivalMs: Long,
+        ): Boolean {
+            if (audioLastArrivalMs <= 0L) return false          // no audio stream — no heartbeat
+            if (videoLastArrivalMs <= 0L) return false          // nothing ever arrived; not our case
+            return nowMs - audioLastArrivalMs >= SESSION_SILENT_MS &&
+                nowMs - videoLastArrivalMs >= SESSION_SILENT_MS
         }
 
         /**

@@ -11,6 +11,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.5.0] - 2026-08-06
+
+The first release driven by a log from the device instead of by reasoning about the code.
+
+Captured on hardware: the picture froze while the iPad went on playing, and Ferry sat there
+for twelve seconds until the user gave up and closed it. The log says exactly why — and it
+was not a crash. Nothing threw, nothing stalled the main thread, and no crash report was
+written.
+
+### Fixed
+
+- **A dead session with the socket still open was invisible to every watchdog rule.** The
+  data connection never closed, so `isStreamDead` saw nothing wrong. And `isStalled`
+  deliberately refuses to judge when no frames are arriving — because iOS sends video only
+  when the screen changes, which makes a paused iPad indistinguishable from a dead link if
+  video is all you look at. That refusal was correct, and it left this case uncovered.
+
+  **Audio breaks the tie, and Ferry has always had it.** Realtime mirroring audio is not
+  event-driven: it runs at a constant ~92 packets a second for as long as the session lives.
+  In the captured log both streams stopped within a second of each other and never came back.
+  A realtime stream that goes silent is not idling, it is gone — so eight seconds of silence
+  on *both* halves now ends the session and lets the sender re-establish it.
+
+  Requiring audio to have arrived at least once is what keeps this honest: with no audio
+  stream there is no heartbeat, video silence alone still means nothing, and the rule declines
+  to guess. Six tests pin the cases that must *not* fire, including a static screen with audio
+  still flowing.
+
+- **A clean shutdown logged a SocketException stack trace at ERROR.** `TimingHandler` decided
+  "expected or not" by checking whether a field had been nulled yet, and lost the race against
+  its own `stop()` every time. So every shutdown put a stack trace in the log directly beneath
+  the line explaining that Ferry was shutting down deliberately — which reads exactly like the
+  crash someone came looking for.
+
+- **The audio duplicate percentage was under-reported by nearly half.** `recv` already counts
+  every datagram including duplicates, and the calculation added them to the denominator a
+  second time. A real log showed "39% dup" for `recv=8000 dup=5331`, which is 67% — the
+  difference between the sender sending each packet about 1.6× and about 3×.
+
+- **The diagnostics server leaked a thread per open.** `stop()` closed the socket but never
+  shut down its executor, whose core thread then stayed alive for the life of the process. A
+  startup log showed four opens in ninety seconds. Same class of leak 7.0.0 exists to fix,
+  reintroduced by me in 7.2.0 — a diagnostic tool has no business being the thing that
+  degrades the app.
+
+### Changed
+
+- The advertised mirroring size is logged when the receiver starts, and published to the HUD
+  immediately. It is a setting the user can change and a request the sender may decline, and
+  until a cast began there was no way to confirm either.
+
+---
+
 ## [7.4.0] - 2026-08-06
 
 ### Fixed

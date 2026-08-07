@@ -67,6 +67,12 @@ class DiagnosticServer(private val body: () -> String) {
         url = null
         runCatching { serverSocket?.close() }
         serverSocket = null
+        // Shut the executor down too, not just the socket. Without this the pool's core thread stays
+        // alive for the life of the process, and a new server — a new thread — is created every time
+        // the diagnostics screen is opened. Caught in a real startup log showing four opens in ninety
+        // seconds; that is four threads that were never coming back, in the same class of leak 7.0.0
+        // existed to fix. A diagnostic tool has no business being the thing that degrades the app.
+        runCatching { threads.shutdown() }
     }
 
     private fun accept(socket: ServerSocket) {

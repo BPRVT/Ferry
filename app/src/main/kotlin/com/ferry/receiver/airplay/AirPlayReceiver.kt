@@ -260,7 +260,13 @@ class AirPlayReceiver(
             onShowPin = { pin -> onPinChanged(pin) },
             forceScreenMirroring = forceScreenMirroring
         ).also { it.start(scope) }
-        Logger.i("RTSP handler started on port 7000 (audioEnabled=$audioEnabled pinAuth=$pinAuthEnabled " +
+        // The advertised size belongs in this line. It is a *setting* the user can change and a
+        // *request* the sender may decline, and until a cast starts there was no way to confirm
+        // either — StreamStats.videoAdvertised is only written when a decoder is built, so a log
+        // taken before the first cast could not answer "did my 720p setting take?" at all.
+        StreamStats.videoAdvertised = "${mirrorWidth}x${mirrorHeight}"
+        Logger.i("RTSP handler started on port 7000 (advertising ${mirrorWidth}x${mirrorHeight} " +
+                 "audioEnabled=$audioEnabled pinAuth=$pinAuthEnabled " +
                  "forceScreenMirroring=$forceScreenMirroring)")
     }
 

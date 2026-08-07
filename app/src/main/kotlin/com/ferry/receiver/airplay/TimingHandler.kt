@@ -56,6 +56,18 @@ class TimingHandler {
     @Volatile private var socket: DatagramSocket? = null
 
     /**
+     * Set false by [stop] *before* the socket is closed, so [runLoop] can tell a deliberate
+     * shutdown from a real fault.
+     *
+     * The `socket != null` check it replaces was a race, and it lost: `stop()` closes the socket
+     * and only then nulls the field, while the blocked `receive()` throws the instant the close
+     * lands. So an ordinary shutdown logged a full SocketException stack trace at ERROR — seen
+     * in a real diagnostics log, sitting directly under the line explaining that Ferry was
+     * shutting down on purpose, where it reads exactly like the crash someone came looking for.
+     */
+    @Volatile private var running = false
+
+    /**
      * Estimated offset between our local clock and the sender's RTP timestamp clock,
      * in microseconds. Updated on every received timing probe. 0 means no probes yet.
      *
@@ -100,6 +112,7 @@ class TimingHandler {
      * Safe to call before [start] or multiple times.
      */
     fun stop() {
+        running = false          // BEFORE the close, so runLoop reads it correctly. See [running].
         try {
             socket?.close()
         } catch (e: Exception) {
@@ -115,6 +128,7 @@ class TimingHandler {
             // Use a local val to avoid repeated null-checks on the @Volatile field
             val sock = DatagramSocket(port)
             socket = sock
+            running = true
             Logger.i("Timing handler listening on UDP port $port")
 
             val buf = ByteArray(PACKET_SIZE)
@@ -134,7 +148,7 @@ class TimingHandler {
             }
         } catch (e: Exception) {
             // SocketException thrown when socket.close() is called from stop() — expected
-            if (socket != null) {
+            if (running) {
                 Logger.e("Timing handler error (unexpected)", e)
             } else {
                 Logger.d("Timing socket closed (expected during shutdown)")

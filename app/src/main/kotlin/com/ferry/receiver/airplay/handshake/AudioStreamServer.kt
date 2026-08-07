@@ -214,6 +214,10 @@ class AudioStreamServer(
                 packet.length = buf.size      // reset capacity — receive() shrinks length to the last datagram
                 socket.receive(packet)
                 recv++
+                // Timestamp every arrival, including duplicates: the question the watchdog asks is
+                // "is this link carrying anything at all", and a duplicate proves that as well as a
+                // unique packet does.
+                StreamStats.audioLastArrivalMs = System.currentTimeMillis()
                 if (rtpCount < 6) {
                     Logger.i("Audio RTP[$rtpCount] ${packet.length}B hdr: ${hex(packet.data, minOf(20, packet.length))}")
                     rtpCount++
@@ -221,7 +225,13 @@ class AudioStreamServer(
                 handleRtpPacket(packet.data, 0, packet.length)
                 StreamStats.audioQueue = frameQueue.size
                 if (recv % 500 == 0) {
-                    StreamStats.audioDupPct = dupCount * 100 / (recv + dupCount)
+                    // recv already counts EVERY datagram, duplicates included — it is
+                    // incremented before the dedup runs. Adding dupCount to the denominator
+                    // counted them twice and under-reported the rate badly: a real log showed
+                    // "39% dup" for recv=8000 dup=5331, which is 67%. That is the difference
+                    // between the sender sending each packet about 1.6x and about 3x, and the
+                    // second is a materially different picture of what the link is carrying.
+                    StreamStats.audioDupPct = (dupCount.toLong() * 100 / recv).toInt()
                     Logger.i("Audio stats: recv=$recv dup=$dupCount (${StreamStats.audioDupPct}% dup) " +
                         "qDrop=$qDropCount resendReq=$resendReqCount resendFill=$resendFillCount queue=${frameQueue.size}")
                 }

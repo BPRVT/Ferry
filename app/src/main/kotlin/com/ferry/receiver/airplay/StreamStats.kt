@@ -152,6 +152,18 @@ object StreamStats {
 
     // ─── Audio (AudioStreamServer) ───────────────────────────────────────────
     @Volatile var audioActive = false  // true while an audio stream is running
+
+    /**
+     * When an audio packet last arrived (epoch millis, 0 = never).
+     *
+     * **The heartbeat the video path does not have.** iOS sends video frames only when the screen
+     * changes, so silence on the video stream is ambiguous — a paused iPad and a dead connection look
+     * identical, which is why the stall detector could never use a timeout on video arrivals.
+     * Realtime mirroring audio has no such property: it runs at a constant ~92 packets a second for
+     * as long as the session is alive. So audio going quiet *while the socket is still open* is the
+     * unambiguous signal video could never provide — see `MirrorStreamServer.isSessionSilent`.
+     */
+    @Volatile var audioLastArrivalMs = 0L
     @Volatile var audioQueue = 0       // current playback-queue depth
     @Volatile var audioDupPct = 0      // % of RTP packets that were redundant duplicates
 
@@ -172,6 +184,7 @@ object StreamStats {
         watchdogRecoveries = 0; watchdogLastReason = ""; watchdogLastMs = 0L
         videoWidth = 0; videoHeight = 0
         audioActive = false; audioQueue = 0; audioDupPct = 0; audioCatchUp = false
+        audioLastArrivalMs = 0L
         // displayRefreshHz is NOT reset — it is a property of the TV, not of the stream, and
         // StreamingScreen only republishes it when a Surface is created.
     }
