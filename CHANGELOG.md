@@ -11,6 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.9.0] - 2026-08-07
+
+7.7.0's escalation fired exactly as designed, and the log shows it was wrong to fire.
+
+### Fixed
+
+- **Ferry killed a session that was surviving a Wi-Fi storm.** The captured log is precise
+  about it. Two minutes of a flawless session — 58 fps, zero drops, queue 1/16 — then audio
+  resend requests went from **1 to 64 in ten seconds**, the audio queue slammed between full and
+  empty, and the picture froze. Ten seconds later Ferry ended the session.
+
+  The link was **struggling, not dead**: audio was still arriving throughout, and the sender was
+  actively resending. That is a session that might well have come back once the Wi-Fi settled.
+
+  Two things now make this far more reluctant. **Fifteen failed rebuilds instead of five**, on
+  the reasoning that a wedged decoder is not time-limited — waiting longer costs a longer freeze
+  and nothing else — whereas a network event is, and outliving it is the entire point. And the
+  session is **never torn down while the link is visibly fighting**, measured by audio resend
+  requests, which sit at zero for minutes on a healthy session.
+
+  A frozen picture on a *struggling* link is a symptom. A frozen picture on a *quiet* link is a
+  wedged decoder. Only the second is something a new session can fix — and since 7.8.0 we know
+  ending the session does not reliably bring the sender back, so a mistake here costs the whole
+  cast rather than a brief reconnection.
+
+- **"0 decoder rebuilds changed nothing."** The counter was reset one line before being printed,
+  so the single line whose entire job is reporting how many attempts failed reported none. It
+  said `0` in a real log, having just made five.
+
+### Added
+
+- Audio resend requests are surfaced as a first-class signal (`StreamStats.audioResendRequests`),
+  and the rebuild log now carries the current rate. It is the clearest evidence available for
+  distinguishing "the network is in trouble" from "Ferry is in trouble", and that distinction now
+  decides whether the most destructive recovery is allowed to run.
+
+---
+
 ## [7.8.0] - 2026-08-07
 
 A log from hardware that overturns an assumption Ferry has carried since 6.7.0.

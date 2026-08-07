@@ -179,6 +179,20 @@ object StreamStats {
      * unambiguous signal video could never provide — see `MirrorStreamServer.isSessionSilent`.
      */
     @Volatile var audioLastArrivalMs = 0L
+
+    /**
+     * Cumulative RAOP resend requests Ferry has sent — the clearest signal available that the
+     * **network**, rather than Ferry, is in trouble.
+     *
+     * A resend request means a gap in the audio sequence that the sender's own 3× redundancy did not
+     * cover, which takes real packet loss. In a healthy session this sits still for minutes. In a
+     * captured failure it went from 1 to 64 in ten seconds while the picture froze — and that
+     * distinction matters enormously, because a frozen picture during a network storm is a symptom
+     * that may clear on its own, while a frozen picture on a quiet link is a wedged decoder that
+     * never will. Ferry's most destructive recovery now depends on telling those apart; see
+     * `MirrorStreamServer.shouldRecycleAfterStall`.
+     */
+    @Volatile var audioResendRequests = 0
     @Volatile var audioQueue = 0       // current playback-queue depth
     @Volatile var audioDupPct = 0      // % of RTP packets that were redundant duplicates
 
@@ -199,7 +213,7 @@ object StreamStats {
         watchdogRecoveries = 0; watchdogLastReason = ""; watchdogLastMs = 0L
         videoWidth = 0; videoHeight = 0
         audioActive = false; audioQueue = 0; audioDupPct = 0; audioCatchUp = false
-        audioLastArrivalMs = 0L
+        audioLastArrivalMs = 0L; audioResendRequests = 0
         // displayRefreshHz is NOT reset — it is a property of the TV, not of the stream, and
         // StreamingScreen only republishes it when a Surface is created.
     }

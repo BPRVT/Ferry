@@ -316,6 +316,7 @@ class AudioStreamServer(
             req[6] = (count ushr 8).toByte();      req[7] = count.toByte()
             resendCtr = (resendCtr + 1) and 0xFFFF
             resendReqCount++
+            StreamStats.audioResendRequests = resendReqCount
             runCatching { controlSocket.send(DatagramPacket(req, req.size, addr)) }
         }
     }

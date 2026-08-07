@@ -215,6 +215,7 @@ class MirrorStreamServer(
     private var lastFramesShown = 0
     /** Consecutive watchdog rebuilds that did not put a single frame on screen. */
     private var consecutiveStallRebuilds = 0
+    private var lastResends = 0
     private var lastFramesLost = 0
     private var degradedTicks = 0
     private var lastRecycleMs = 0L
@@ -580,6 +581,11 @@ class MirrorStreamServer(
 
             // The displayed frame rate, sampled on the same one-second tick as everything else.
             // See StreamStats.videoShownFps for why this is the number that was missing.
+            // How hard the link is working to stay up, this second. See [shouldRecycleAfterStall].
+            val resendsNow = StreamStats.audioResendRequests
+            val resendsThisTick = (resendsNow - lastResends).coerceAtLeast(0)
+            lastResends = resendsNow
+
             val shownNow = StreamStats.videoShown
             StreamStats.videoShownFps = (shownNow - lastFramesShown).coerceAtLeast(0)
             // A frame reaching the screen is the only proof a rebuild worked, so it is the only
@@ -624,19 +630,24 @@ class MirrorStreamServer(
             // what the user does by hand when they stop and restart the share, and they have already
             // confirmed that works.
             consecutiveStallRebuilds++
-            if (Companion.shouldRecycleAfterStall(consecutiveStallRebuilds, now, lastRecycleMs)) {
+            val attempts = consecutiveStallRebuilds
+            if (Companion.shouldRecycleAfterStall(attempts, resendsThisTick, now, lastRecycleMs)) {
                 lastRecycleMs = now
                 consecutiveStallRebuilds = 0
                 StreamStats.watchdogLastReason = "$reason — session recycled"
-                Logger.w("Watchdog: $consecutiveStallRebuilds decoder rebuilds changed nothing " +
-                    "($reason) — a decoder with no keyframe cannot recover by being rebuilt. Ending " +
-                    "the session so the sender starts a new stream, which begins with one.")
+                // `attempts`, not the field: the field is reset a line above, and interpolating it
+                // here printed "0 decoder rebuilds changed nothing" in a real log — the one line
+                // whose entire job is to report how many attempts failed.
+                Logger.w("Watchdog: $attempts decoder rebuilds changed nothing ($reason) on a stable " +
+                    "link — a decoder with no keyframe cannot recover by being rebuilt. Ending the " +
+                    "session so the sender starts a new stream, which begins with one.")
                 onStreamDead()
                 continue
             }
             Logger.w("Watchdog: no frame shown for ${(now - maxOf(StreamStats.videoLastShownMs, firstArrivalMs))}ms " +
                 "while frames are still arriving ($reason) — forcing a decoder rebuild " +
-                "(attempt $consecutiveStallRebuilds of $STALL_REBUILDS_BEFORE_RECYCLE)")
+                "(attempt $attempts of $STALL_REBUILDS_BEFORE_RECYCLE, " +
+                "${resendsThisTick} audio resends this second)")
             forceRebuild = true
         }
     }
@@ -1248,10 +1259,40 @@ class MirrorStreamServer(
          * enough that a rebuild which genuinely needed a moment (the codec settling, a keyframe a
          * second away) is not cut off before it can work.
          */
-        private const val STALL_REBUILDS_BEFORE_RECYCLE = 5
+        private const val STALL_REBUILDS_BEFORE_RECYCLE = 15
+
+        /**
+         * Audio resend requests in one second above which the **link** is considered to be in
+         * trouble, and the session must not be torn down.
+         *
+         * A resend request means a gap the sender's own 3× redundancy failed to cover, so it takes
+         * real loss. A healthy session sits at zero for minutes on end. Three a second is far above
+         * the noise floor and far below what a genuine storm produces — the captured failure ran at
+         * roughly 6–13 a second.
+         */
+        private const val RESEND_DISTRESS_PER_SECOND = 3
 
         /**
          * Whether repeated failed rebuilds should escalate to ending the session.
+         *
+         * **Two things learned from hardware shape this, and both make it more reluctant.**
+         *
+         * First, the cost of being wrong is far higher than 7.7.0 assumed. Ending the session does
+         * *not* reliably bring the sender back (see `ui/NoticeScreen`), so a mistaken recycle does
+         * not cost a brief reconnection — it costs the whole cast, until somebody picks up a device
+         * and starts it again.
+         *
+         * Second, and the reason for [resendsThisSecond]: a captured log shows this firing during a
+         * **network storm**. Audio resend requests went from 1 to 64 in ten seconds, the audio queue
+         * slammed between full and empty, and the picture froze — and ten seconds later Ferry killed
+         * a session that might well have recovered on its own once the Wi-Fi settled. A frozen
+         * picture on a *struggling* link is a symptom; a frozen picture on a *quiet* link is a wedged
+         * decoder. Only the second is something a new session can fix, and only the second is worth
+         * a cast for.
+         *
+         * So: fifteen failed rebuilds rather than five, and never while the link is visibly fighting.
+         * A wedged decoder is not time-limited — waiting longer costs a longer freeze and nothing
+         * else — whereas a network event is, and outliving it is the entire point.
          *
          * Shares [RECYCLE_MIN_INTERVAL_MS] with the frame-loss path deliberately: both end in the
          * same visible reconnection, so a link bad enough to trigger both must still not produce one
@@ -1260,10 +1301,13 @@ class MirrorStreamServer(
          */
         internal fun shouldRecycleAfterStall(
             consecutiveRebuilds: Int,
+            resendsThisSecond: Int,
             nowMs: Long,
             lastRecycleMs: Long,
         ): Boolean {
             if (consecutiveRebuilds < STALL_REBUILDS_BEFORE_RECYCLE) return false
+            // Never tear down a session while the link is visibly struggling. See the KDoc.
+            if (resendsThisSecond >= RESEND_DISTRESS_PER_SECOND) return false
             return nowMs - lastRecycleMs >= RECYCLE_MIN_INTERVAL_MS
         }
 
