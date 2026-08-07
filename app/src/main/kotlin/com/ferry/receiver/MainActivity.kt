@@ -66,6 +66,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pinScreen: PinScreen
     private lateinit var diagnosticScreen: com.ferry.receiver.ui.DiagnosticScreen
     private var diagnosticServer: com.ferry.receiver.util.DiagnosticServer? = null
+    /** True while the overlay is showing a stored crash report rather than the live view. */
+    private var showingStoredCrashReport = false
 
     // Service binding — gives access to state flows for showing/hiding the streaming overlay
     private var service: FerryService? = null
@@ -225,21 +227,46 @@ class MainActivity : AppCompatActivity() {
     private fun showLastCrashIfAny() {
         val report = com.ferry.receiver.util.CrashReporter.read() ?: return
         com.ferry.receiver.util.Logger.w("Previous run ended abnormally — showing the report")
-        // Serve the same text over the LAN while the screen is up, so it can be copied rather than
-        // transcribed from a photograph. Stopped when the report is dismissed, and by its own
-        // timeout regardless — see DiagnosticServer.
-        diagnosticServer = com.ferry.receiver.util.DiagnosticServer { report }
-        diagnosticScreen.show(report, diagnosticServer?.start())
-        diagnosticScreen.visibility = View.VISIBLE
-        streamingContainer.visibility = View.VISIBLE
+        showDiagnostics(crashReport = report)
     }
 
-    /** Closes the report and the LAN endpoint that was serving it. */
+    /**
+     * Shows the diagnostics overlay and serves the same text over the LAN while it is up.
+     *
+     * Two callers, and the difference between them is what happens on dismiss. A [crashReport] is a
+     * stored artefact that has now been seen, so dismissing it discards it. The live view — opened
+     * from Settings, [crashReport] null — is just a window onto the current state and discards
+     * nothing, which is the point of having it: **waiting for a crash to look at the logs is
+     * backwards.** Most of what goes wrong here never throws.
+     *
+     * The body is a lambda rather than a fixed string in the live case, so reloading the page in a
+     * browser shows the current state rather than the moment the screen was opened.
+     */
+    fun showDiagnostics(crashReport: String? = null) {
+        diagnosticServer?.stop()
+        showingStoredCrashReport = crashReport != null
+        val body: () -> String =
+            if (crashReport != null) ({ crashReport }) else com.ferry.receiver.util.CrashReporter::liveReport
+        diagnosticServer = com.ferry.receiver.util.DiagnosticServer(body)
+        diagnosticScreen.show(body(), diagnosticServer?.start(), live = crashReport == null)
+        diagnosticScreen.visibility = View.VISIBLE
+        streamingContainer.visibility = View.VISIBLE
+        streamingContainer.bringToFront()
+    }
+
+    /** Closes the diagnostics overlay and the LAN endpoint that was serving it. */
     private fun dismissDiagnostics() {
         diagnosticScreen.visibility = View.GONE
         diagnosticServer?.stop()
         diagnosticServer = null
-        com.ferry.receiver.util.CrashReporter.clear()
+        // Only a stored crash report is consumed by being read. The live view owns nothing.
+        if (showingStoredCrashReport) com.ferry.receiver.util.CrashReporter.clear()
+        showingStoredCrashReport = false
+        // Put the container back the way the current session wants it. Leaving it VISIBLE would
+        // paint a black sheet over the home screen; forcing it GONE would blank a live mirror.
+        if (!isSessionActive(currentAirPlayState, currentNowPlaying, currentPhotoFrame, currentPin)) {
+            streamingContainer.visibility = View.GONE
+        }
     }
 
     /**

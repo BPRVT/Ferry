@@ -77,6 +77,33 @@ object CrashReporter {
         }
     }
 
+    /**
+     * A report for right now: what the pipeline is doing, the recent log, and the last stored crash
+     * if there was one.
+     *
+     * The counterpart to [read], and the more useful of the two in practice. Waiting for a crash to
+     * find out what Ferry is doing is backwards — most of what goes wrong here does not throw. It
+     * stutters, or drops frames, or advertises a resolution the sender declines, and all of that is
+     * visible in the log and the counters while it is happening and gone afterwards.
+     *
+     * Rebuilt on every call rather than snapshotted, so reloading the page in a browser shows the
+     * current state instead of whatever it was when the screen was opened.
+     */
+    fun liveReport(): String = buildString {
+        appendLine("Ferry diagnostics")
+        appendLine(SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date()))
+        appendLine()
+        appendLine(runCatching { StreamStats.summary() }.getOrElse { "(stats unavailable)" })
+        appendLine()
+        read()?.let {
+            appendLine("─── last recorded crash or freeze ───")
+            appendLine(it.trimEnd())
+            appendLine()
+        }
+        appendLine("─── recent log ───")
+        appendLine(runCatching { LogRing.snapshot() }.getOrElse { "(log unavailable)" })
+    }
+
     /** The last stored report, or null if Ferry's previous run ended cleanly. */
     fun read(): String? = runCatching {
         val file = file() ?: return null

@@ -68,6 +68,7 @@ class SettingsFragment : Fragment() {
     private lateinit var rowDebugOverlay: View
     private lateinit var rowForceHighRes: View
     private lateinit var rowForceLowRes: View
+    private lateinit var rowDiagnostics: View
     private lateinit var textVersionValue: TextView
     private lateinit var rowReset: LinearLayout
 
@@ -112,6 +113,7 @@ class SettingsFragment : Fragment() {
         rowDebugOverlay     = view.findViewById(R.id.row_debug_overlay)
         rowForceHighRes     = view.findViewById(R.id.row_force_high_res)
         rowForceLowRes      = view.findViewById(R.id.row_force_low_res)
+        rowDiagnostics      = view.findViewById(R.id.row_diagnostics)
         textVersionValue    = view.findViewById(R.id.text_version_value)
         rowReset            = view.findViewById(R.id.row_reset)
     }
@@ -155,6 +157,10 @@ class SettingsFragment : Fragment() {
         configureToggleRow(rowDebugOverlay, R.string.setting_debug_overlay,      R.string.setting_debug_overlay_subtitle)
         configureToggleRow(rowForceHighRes, R.string.setting_force_high_res,      R.string.setting_force_high_res_subtitle)
         configureToggleRow(rowForceLowRes,  R.string.setting_force_low_res,       R.string.setting_force_low_res_subtitle)
+        configureToggleRow(rowDiagnostics,  R.string.setting_diagnostics,         R.string.setting_diagnostics_subtitle)
+        // Not a toggle: hide the [ ON ]/[ OFF ] readout the shared row layout provides, so it does
+        // not sit there implying this row has a state to be in.
+        rowDiagnostics.findViewById<TextView>(R.id.text_setting_value)?.visibility = View.GONE
 
         textVersionValue.text = BuildConfig.VERSION_NAME
     }
@@ -298,6 +304,14 @@ class SettingsFragment : Fragment() {
             // its layout tick, so the picture re-fits within ~200 ms instead of at the next session.
             StreamStats.smartFillEnabled = enabled
             save { it.copy(smartFillEnabled = enabled) }
+        }
+
+        // Not a toggle — opens the diagnostics overlay, which also starts the LAN endpoint that
+        // serves the same text. Deliberately reachable at any time rather than only after a crash:
+        // most of what goes wrong in this app never throws, and by the time it has, the log lines
+        // that explain it are the ones from *before* the crash.
+        rowDiagnostics.setOnClickListener {
+            (activity as? com.ferry.receiver.MainActivity)?.showDiagnostics()
         }
 
         rowAudioBoost.setOnClickListener { showAudioBoostDialog() }

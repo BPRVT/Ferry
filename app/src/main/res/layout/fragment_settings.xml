@@ -92,6 +92,10 @@
         <include layout="@layout/settings_toggle_row"
             android:id="@+id/row_force_high_res" />
 
+        <!-- Diagnostics: live state + recent log, fetchable over the LAN -->
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_diagnostics" />
+
         <!-- Lower mirroring resolution (720p) — the one setting that reduces work at the sender -->
         <include layout="@layout/settings_toggle_row"
             android:id="@+id/row_force_low_res" />

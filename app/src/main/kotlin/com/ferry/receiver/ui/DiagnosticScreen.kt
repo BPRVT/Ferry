@@ -53,12 +53,15 @@ class DiagnosticScreen @JvmOverloads constructor(
      * selectable in a phone browser. Null when the server could not bind, in which case the
      * photograph route is still there and is said so plainly rather than silently omitted.
      */
-    fun show(report: String, fetchUrl: String?) {
+    fun show(report: String, fetchUrl: String?, live: Boolean) {
         body.text = buildString {
             appendLine(report.trimEnd())
             appendLine()
             appendLine("─".repeat(60))
-            appendLine("Ferry recorded this after it stopped responding.")
+            appendLine(
+                if (live) "Ferry's current state and recent log."
+                else "Ferry recorded this after it stopped responding."
+            )
             appendLine()
             if (fetchUrl != null) {
                 appendLine("To copy it as text, open this on your phone or laptop")
@@ -66,11 +69,17 @@ class DiagnosticScreen @JvmOverloads constructor(
                 appendLine()
                 appendLine("    $fetchUrl")
                 appendLine()
-                appendLine("The address works while this screen is open.")
+                appendLine(
+                    if (live) "Reload the page any time for the latest — the address works while this screen is open."
+                    else "The address works while this screen is open."
+                )
             } else {
                 appendLine("Photograph this screen to report the problem.")
             }
-            appendLine("Press any key to dismiss — it will not be shown again.")
+            appendLine(
+                if (live) "Press any key to close."
+                else "Press any key to dismiss — it will not be shown again."
+            )
         }
     }
 

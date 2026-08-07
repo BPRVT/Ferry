@@ -117,6 +117,8 @@
     <string name="setting_audio_boost_off">Off</string>
     <string name="setting_audio_boost_value">+%1$d dB</string>
     <string name="setting_version">Version</string>
+    <string name="setting_diagnostics">Diagnostics &amp; logs</string>
+    <string name="setting_diagnostics_subtitle">Show the current state and recent log, with a web address to copy them from your phone</string>
     <string name="setting_reset_defaults">Reset to defaults</string>
 
     <!-- ── Waiting screen (legacy, used by WaitingScreen view) ─── -->

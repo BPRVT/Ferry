@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.3.0] - 2026-08-06
+
+Logs on demand, instead of only after something breaks.
+
+### Added
+
+- **Settings → Diagnostics & logs.** Shows Ferry's current state and recent log at any
+  time, with the same LAN address 7.2.0 added for crash reports — open it on a phone,
+  reload for the latest, copy it as text.
+
+  7.2.0 could only surface a report *after* a crash, which is the wrong way round: most of
+  what goes wrong in this app never throws. It stutters, or drops frames, or advertises a
+  resolution the sender quietly declines — all of which is plainly visible in the log and
+  the counters while it is happening, and gone afterwards. Waiting for a crash to look at
+  the logs meant only ever seeing the failures severe enough to kill the process.
+
+  The live view is rebuilt on every request rather than snapshotted when the screen opens,
+  so reloading the browser page shows the current state. It owns nothing and discards
+  nothing — unlike a stored crash report, which is consumed by being read.
+
+---
+
 ## [7.2.0] - 2026-08-06
 
 Getting the evidence off the television, and a correction to 7.1.0's resolution readout.
