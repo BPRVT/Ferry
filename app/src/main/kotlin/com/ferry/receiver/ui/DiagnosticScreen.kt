@@ -27,6 +27,7 @@ class DiagnosticScreen @JvmOverloads constructor(
 ) : FrameLayout(context, attrs, defStyleAttr) {
 
     private val body: TextView
+    private val scroller: ScrollView
 
     init {
         setBackgroundColor(Color.parseColor("#F2000000"))
@@ -41,50 +42,65 @@ class DiagnosticScreen @JvmOverloads constructor(
             setPadding(SAFE_PX, SAFE_PX, SAFE_PX, SAFE_PX)
             setTextIsSelectable(false)
         }
-        addView(ScrollView(context).apply { addView(body) })
+        scroller = ScrollView(context).apply { isFillViewport = true; addView(body) }
+        addView(scroller)
     }
 
     /**
-     * Renders [report], with a footer telling the user how to get it off the TV.
+     * Scrolls the report by [pages] screenfuls, so the log below the fold can actually be read.
      *
-     * [fetchUrl] is a LAN address served by [com.ferry.receiver.util.DiagnosticServer] while this
-     * screen is up. It is the point of the whole feature: a stack trace photographed off a
-     * television is transcribable in theory and miserable in practice, and this makes the same text
-     * selectable in a phone browser. Null when the server could not bind, in which case the
-     * photograph route is still there and is said so plainly rather than silently omitted.
+     * A TV remote has no scroll wheel and this overlay swallows every key, so without an explicit
+     * hook the content past the first screen is unreachable — which is exactly how the fetch URL
+     * came to be invisible when it lived at the bottom of a 300-line report.
+     */
+    fun scrollByPages(pages: Int) {
+        scroller.smoothScrollBy(0, (scroller.height * SCROLL_PAGE_FRACTION * pages).toInt())
+    }
+
+    /**
+     * Renders [report] **underneath** a header carrying the fetch URL.
+     *
+     * The URL goes first, and that ordering is the whole lesson. It used to be a footer, appended
+     * after the report — which is up to 300 log lines, on a screen where every key dismissed the
+     * overlay and nothing scrolled it. So the one piece of information the feature exists to deliver
+     * was reliably several screens below the fold and unreachable by design. Reported from hardware
+     * against 7.3.0, with a photograph of a diagnostics screen showing no URL anywhere on it.
+     *
+     * @param fetchUrl LAN address served by [com.ferry.receiver.util.DiagnosticServer] while this
+     *   screen is up, or null if it could not bind — in which case the photograph route is stated
+     *   plainly rather than silently omitted.
      */
     fun show(report: String, fetchUrl: String?, live: Boolean) {
         body.text = buildString {
-            appendLine(report.trimEnd())
-            appendLine()
-            appendLine("─".repeat(60))
-            appendLine(
-                if (live) "Ferry's current state and recent log."
-                else "Ferry recorded this after it stopped responding."
-            )
-            appendLine()
+            appendLine(if (live) "Ferry diagnostics" else "Ferry crash report")
             if (fetchUrl != null) {
-                appendLine("To copy it as text, open this on your phone or laptop")
-                appendLine("(same Wi-Fi, no app needed):")
+                appendLine()
+                appendLine("Open this on your phone or laptop, same Wi-Fi:")
                 appendLine()
                 appendLine("    $fetchUrl")
                 appendLine()
                 appendLine(
-                    if (live) "Reload the page any time for the latest — the address works while this screen is open."
-                    else "The address works while this screen is open."
+                    if (live) "Reload it any time for the latest. Works while this screen is open."
+                    else "Works while this screen is open."
                 )
             } else {
-                appendLine("Photograph this screen to report the problem.")
+                appendLine()
+                appendLine("(No network address available - photograph this screen instead.)")
             }
-            appendLine(
-                if (live) "Press any key to close."
-                else "Press any key to dismiss — it will not be shown again."
-            )
+            appendLine()
+            appendLine("Up/Down to scroll.  Any other key to close.")
+            appendLine("-".repeat(64))
+            appendLine()
+            appendLine(report.trimEnd())
         }
+        scroller.scrollTo(0, 0)
     }
 
     private companion object {
         /** Android TV overscan-safe inset; a set may crop 5% of each edge. */
         const val SAFE_PX = 64
+
+        /** How much of a screenful one Up/Down press moves, leaving context either side. */
+        const val SCROLL_PAGE_FRACTION = 0.8f
     }
 }

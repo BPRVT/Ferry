@@ -387,7 +387,14 @@ class MainActivity : AppCompatActivity() {
         // in front of someone who came here to cast; making them hunt for the right button would be
         // its own small insult on top of the crash.
         if (diagnosticScreen.visibility == View.VISIBLE) {
-            dismissDiagnostics()
+            // Up/Down scroll; anything else closes. The report runs to hundreds of lines and a TV
+            // remote has no other way through it — without this, everything past the first screenful
+            // is unreachable, which is how the fetch URL managed to be invisible in 7.3.0.
+            when (keyCode) {
+                android.view.KeyEvent.KEYCODE_DPAD_UP -> diagnosticScreen.scrollByPages(-1)
+                android.view.KeyEvent.KEYCODE_DPAD_DOWN -> diagnosticScreen.scrollByPages(1)
+                else -> dismissDiagnostics()
+            }
             return true
         }
         val overlayActive = currentNowPlaying != null || currentAirPlayState == ProtocolState.CONNECTED

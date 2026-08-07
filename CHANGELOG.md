@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.3.1] - 2026-08-06
+
+### Fixed
+
+- **The diagnostics URL was invisible.** Reported from hardware with a photograph of a
+  diagnostics screen carrying no address anywhere on it.
+
+  The URL was a *footer*, appended after the report — which runs to 300 log lines — on a
+  screen where every keypress dismissed the overlay and nothing scrolled it. So the single
+  piece of information the whole feature exists to deliver was several screens below the
+  fold and unreachable by design.
+
+  It is now the first thing on the screen, above the report. Up and Down scroll; any other
+  key closes.
+
+---
+
 ## [7.3.0] - 2026-08-06
 
 Logs on demand, instead of only after something breaks.
