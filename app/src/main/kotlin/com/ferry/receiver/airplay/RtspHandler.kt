@@ -100,6 +100,15 @@ open class RtspHandler(
     @Volatile
     private var running = false
 
+    /**
+     * True between [endActiveSession] closing the control socket and [handleClient] noticing.
+     *
+     * Distinguishes "we hung up on the sender to force a recovery" from "the connection failed",
+     * which are the same SocketException and completely different events. See [endActiveSession].
+     */
+    @Volatile
+    private var endingSession = false
+
     private var currentCSeq: Int = 0
 
     @Volatile
@@ -165,6 +174,12 @@ open class RtspHandler(
     fun endActiveSession() {
         val socket = activeClient ?: return
         Logger.w("Ending the active RTSP session — the video stream is gone")
+        // Mark the close as ours BEFORE it happens, so the read blocked in handleClient recognises
+        // the SocketException it is about to get as a deliberate teardown. Without this, every
+        // watchdog recovery logs a full stack trace at ERROR — seen in a real log, directly under
+        // the line explaining that Ferry was ending the session on purpose, which reads exactly like
+        // the crash the person was hunting for. Same defect, same fix, as TimingHandler in 7.5.0.
+        endingSession = true
         runCatching { socket.close() }
             .onFailure { Logger.w("Error closing control connection (non-fatal) — ${it.message}") }
     }
@@ -280,9 +295,14 @@ open class RtspHandler(
                 )
             }
         } catch (e: Exception) {
-            if (running) Logger.e("Error handling RTSP client", e)
+            when {
+                endingSession -> Logger.i("RTSP client closed by us (session recovery) — expected")
+                running -> Logger.e("Error handling RTSP client", e)
+                else -> Logger.d("RTSP client closed during shutdown (expected)")
+            }
         } finally {
             Logger.i("Client disconnected")
+            endingSession = false
             socket.close()
             activeClient = null
             currentSession = null

@@ -96,7 +96,17 @@ class AirPlayReceiver(
      */
     private val onNowPlayingChanged: (NowPlayingInfo?) -> Unit = {},
     /** Pairing PIN to show ([pin]) or hide (null) on the TV during SRP pair-setup. */
-    private val onPinChanged: (pin: String?) -> Unit = {}
+    private val onPinChanged: (pin: String?) -> Unit = {},
+    /**
+     * Called when Ferry ends a session itself to recover, with what the watchdog found.
+     *
+     * Exists because ending the session does **not** reliably make the sender come back — a log from
+     * hardware shows the watchdog correctly detecting a dead stream, hanging up, and the iPad simply
+     * never reconnecting. Ferry then sits advertising while the television shows nothing, which is
+     * indistinguishable from the app having crashed. The recovery is right; going through with it
+     * silently is not. See [com.ferry.receiver.ui.NoticeScreen].
+     */
+    private val onSessionRecovered: (reason: String) -> Unit = {}
 ) {
 
     // Persistent store of paired controllers (for PIN access control / pair-verify).
@@ -504,7 +514,13 @@ class AirPlayReceiver(
             // this the sender keeps mirroring into a connection that no longer exists — the reported
             // failure was an iPad happily playing while the TV showed one frozen frame and Ferry
             // still said CONNECTED. Ending the session is what makes the sender re-establish.
-            onStreamDead = { rtspHandler?.endActiveSession() },
+            onStreamDead = {
+                // Tell the viewer before hanging up: once the session is gone the streaming screen
+                // disappears, and without this the whole event is a picture that stops for no
+                // visible reason.
+                onSessionRecovered(StreamStats.watchdogLastReason.ifBlank { "the stream went quiet" })
+                rtspHandler?.endActiveSession()
+            },
         )
             .also { mirrorServer = it; it.start(scope); videoPlaying = true; emitNowPlaying() }
             .dataPort

@@ -83,6 +83,13 @@ class FerryService : Service() {
     private val _pairingPin = MutableStateFlow<String?>(null)
     val pairingPin: StateFlow<String?> = _pairingPin.asStateFlow()
 
+    /**
+     * Non-null just after Ferry ended a session itself to recover, carrying what the watchdog found.
+     * Consumed and cleared by [MainActivity], which puts it on the television.
+     */
+    private val _sessionNotice = MutableStateFlow<String?>(null)
+    val sessionNotice: StateFlow<String?> = _sessionNotice.asStateFlow()
+
     // Surface provider — supplied by MainActivity after binding (Sprint 5).
     // The lambda captures this field so it always uses the latest provider even if
     // setVideoSurfaceProvider() is called after startAirPlay().
@@ -231,6 +238,11 @@ class FerryService : Service() {
      * Mac/iPhone is streaming. Bound Activities call this from media-key events. No-op if no AirPlay
      * sender has advertised a DACP identity.
      */
+    /** Clears the recovery notice once the viewer has seen it. */
+    fun clearSessionNotice() {
+        _sessionNotice.value = null
+    }
+
     fun sendAirPlayRemoteCommand(command: String) {
         airPlayReceiver?.sendRemoteCommand(command)
     }
@@ -366,6 +378,9 @@ class FerryService : Service() {
             onPinChanged = { pin ->
                 _pairingPin.value = pin
             },
+            onSessionRecovered = { reason ->
+                _sessionNotice.value = reason
+            },
             onStateChanged = { state ->
                 _airPlayState.value = state
                 when (state) {
@@ -430,6 +445,7 @@ class FerryService : Service() {
         _photoFrame.value = null
         _nowPlaying.value = null
         _pairingPin.value = null
+        _sessionNotice.value = null
     }
 
     // ─── Notification ────────────────────────────────────────────────────────

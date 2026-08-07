@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var photoScreen: PhotoScreen
     private lateinit var nowPlayingScreen: NowPlayingScreen
     private lateinit var pinScreen: PinScreen
+    private lateinit var noticeScreen: com.ferry.receiver.ui.NoticeScreen
     private lateinit var diagnosticScreen: com.ferry.receiver.ui.DiagnosticScreen
     private var diagnosticServer: com.ferry.receiver.util.DiagnosticServer? = null
     /** True while the overlay is showing a stored crash report rather than the live view. */
@@ -201,17 +202,20 @@ class MainActivity : AppCompatActivity() {
         photoScreen = PhotoScreen(this)
         nowPlayingScreen = NowPlayingScreen(this)
         pinScreen = PinScreen(this)
+        noticeScreen = com.ferry.receiver.ui.NoticeScreen(this)
         diagnosticScreen = com.ferry.receiver.ui.DiagnosticScreen(this)
         streamingContainer.addView(streamingScreen)
         streamingContainer.addView(photoScreen)
         streamingContainer.addView(nowPlayingScreen)
         streamingContainer.addView(pinScreen)
+        streamingContainer.addView(noticeScreen)
         // Added last so it sits above every other overlay: if Ferry died, that is the first thing
         // the user needs to see, ahead of any stream that reconnects while they are reading it.
         streamingContainer.addView(diagnosticScreen)
         photoScreen.visibility = View.GONE
         nowPlayingScreen.visibility = View.GONE
         pinScreen.visibility = View.GONE
+        noticeScreen.visibility = View.GONE
         diagnosticScreen.visibility = View.GONE
         showLastCrashIfAny()
     }
@@ -388,6 +392,11 @@ class MainActivity : AppCompatActivity() {
         // A crash report is dismissed by anything at all, and swallows that keypress. It is shown
         // in front of someone who came here to cast; making them hunt for the right button would be
         // its own small insult on top of the crash.
+        // The recovery notice is dismissed by anything — it is an explanation, not a prompt.
+        if (noticeScreen.visibility == View.VISIBLE) {
+            dismissSessionNotice()
+            return true
+        }
         if (diagnosticScreen.visibility == View.VISIBLE) {
             // Up/Down scroll; anything else closes. The report runs to hundreds of lines and a TV
             // remote has no other way through it — without this, everything past the first screenful
@@ -480,9 +489,43 @@ class MainActivity : AppCompatActivity() {
                 updateOverlay()
             }
         }
+        lifecycleScope.launch {
+            svc.sessionNotice.collectLatest { reason ->
+                if (reason != null) showSessionNotice(reason)
+            }
+        }
+    }
+
+    /**
+     * Puts the recovery notice on the television.
+     *
+     * Deliberately shown *over* whatever the overlay logic decides next, because that logic is about
+     * to route to "nothing streaming" — which is the state the viewer needs explaining, not a state
+     * that explains itself. See [com.ferry.receiver.ui.NoticeScreen].
+     */
+    private fun showSessionNotice(reason: String) {
+        noticeScreen.show(reason)
+        noticeScreen.visibility = View.VISIBLE
+        streamingContainer.visibility = View.VISIBLE
+        streamingContainer.bringToFront()
+        noticeScreen.bringToFront()
+    }
+
+    /** Dismisses the recovery notice and lets the overlay return to whatever the session state is. */
+    private fun dismissSessionNotice() {
+        noticeScreen.visibility = View.GONE
+        service?.clearSessionNotice()
+        updateOverlay()
     }
 
     private fun updateOverlay() {
+        // A visible recovery notice outranks the ordinary overlay routing: the routing is about to
+        // choose "nothing is streaming", which is exactly the state the notice exists to explain.
+        if (noticeScreen.visibility == View.VISIBLE) {
+            streamingContainer.visibility = View.VISIBLE
+            noticeScreen.bringToFront()
+            return
+        }
         val photoFrame = currentPhotoFrame
         val nowPlaying = currentNowPlaying
         val pin = currentPin

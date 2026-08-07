@@ -117,6 +117,12 @@
     <string name="setting_audio_boost_off">Off</string>
     <string name="setting_audio_boost_value">+%1$d dB</string>
     <string name="setting_version">Version</string>
+    <!-- Shown on the TV when Ferry ends a session itself to recover. See ui/NoticeScreen.kt: the
+         sender does NOT reliably reconnect, so without this the picture simply stops with no
+         explanation, which is indistinguishable from the app crashing. -->
+    <string name="notice_session_ended_title">Mirroring stopped</string>
+    <string name="notice_session_ended_body">The connection from your device went quiet, so Ferry ended the session.\nSelect Ferry again on your iPhone, iPad or Mac to carry on.</string>
+    <string name="notice_session_ended_detail">%1$s  ·  press any key to dismiss</string>
     <string name="setting_diagnostics">Diagnostics &amp; logs</string>
     <string name="setting_diagnostics_subtitle">Show the current state and recent log, with a web address to copy them from your phone</string>
     <string name="setting_reset_defaults">Reset to defaults</string>

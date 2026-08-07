@@ -11,6 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.8.0] - 2026-08-07
+
+A log from hardware that overturns an assumption Ferry has carried since 6.7.0.
+
+The stream went silent — audio and video both, within eight seconds of each other, with the
+socket still open. **7.5.0's silence rule caught it exactly as designed** and ended the session
+so the sender would re-establish it. The sender never came back. Ferry sat advertising, the
+television showed nothing, and it was reported — reasonably — as "a full freeze silent crash".
+
+### Fixed
+
+- **A recovery that looks identical to a crash.** "Ending the session makes the sender
+  re-establish" has been stated since 6.7.0 and never verified. It is not reliable: iOS may
+  simply stop. The recovery itself is still right — the session really was dead, and Ferry
+  really was correct to hang up — but going through with it *silently* turns a working recovery
+  into an apparent crash.
+
+  Ferry now says so on the television: what happened, and that reselecting Ferry on the sending
+  device will resume. A picture that stops with no explanation is a bug report; the same event
+  with one line of text is a five-second fix the viewer performs themselves.
+
+- **A deliberate teardown logged as an error, with a stack trace.** Closing the control socket
+  to force a recovery raises a `SocketException` in the thread blocked reading it, and
+  `RtspHandler` logged that at ERROR — directly beneath the line explaining that Ferry was
+  ending the session on purpose. Exactly the same defect, and the same fix, as `TimingHandler`
+  in 7.5.0: mark the close as ours *before* it happens.
+
+### Confirmed working, from the same log
+
+- **7.6.0's pacing fix.** `SHOW 8787` against `in=8700`, with **185 skips** — roughly 2%, where
+  the log that prompted the change showed 42%. Frames arriving and frames displayed have
+  converged, which is what the fix was for and what `SHOW /s` was added to make visible.
+- **7.5.0's silence rule**, firing for the first time in the field: *"no audio for 8127ms and no
+  video for 16347ms, with the socket still open"*. Both halves stale, socket open, correctly
+  judged dead.
+
+---
+
 ## [7.7.0] - 2026-08-07
 
 Pause an iPad video for a few minutes, resume it, and the audio comes back while the picture
