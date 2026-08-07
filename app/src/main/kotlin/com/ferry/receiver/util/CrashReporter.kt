@@ -40,6 +40,9 @@ object CrashReporter {
 
     private const val FILE_NAME = "last-crash.txt"
 
+    /** Where a report goes once it has been shown — kept, not deleted. See [markSeen]. */
+    private const val ARCHIVE_NAME = "last-crash-seen.txt"
+
     /** Cap on a stored report, so a pathological recursive stack cannot fill a stick's storage. */
     private const val MAX_REPORT_BYTES = 64 * 1024
 
@@ -95,7 +98,7 @@ object CrashReporter {
         appendLine()
         appendLine(runCatching { StreamStats.summary() }.getOrElse { "(stats unavailable)" })
         appendLine()
-        read()?.let {
+        lastReport()?.let {
             appendLine("─── last recorded crash or freeze ───")
             appendLine(it.trimEnd())
             appendLine()
@@ -110,12 +113,42 @@ object CrashReporter {
         if (!file.exists()) null else file.readText().ifBlank { null }
     }.getOrNull()
 
-    /** Discards the stored report, once the user has seen it. */
-    fun clear() {
-        runCatching { file()?.delete() }
+    /**
+     * Marks the stored report as seen — **without destroying it**.
+     *
+     * This used to delete the file, and that was the wrong call in the most consequential way
+     * available. The entire purpose of a crash report here is to be *sent to someone*, and glancing
+     * at it on a television is not the same as having got it off the device. Deleting on dismiss
+     * meant a single keypress — including the accidental one that closes an overlay you did not
+     * expect — permanently destroyed the only copy of evidence for a failure that may take days to
+     * reproduce. Reported from hardware: a real crash whose report was gone before it could be read.
+     *
+     * So the report is moved aside instead. It stops appearing unprompted at launch, which is all
+     * "seen" ever needed to mean, and stays available under Settings → Diagnostics until a *newer*
+     * crash replaces it. The only thing that discards one now is another one.
+     */
+    fun markSeen() {
+        runCatching {
+            val current = file() ?: return
+            val archive = archiveFile() ?: return
+            if (!current.exists()) return
+            archive.delete()
+            if (!current.renameTo(archive)) {
+                // Rename can fail; copying still preserves the evidence, which is the point.
+                archive.writeText(current.readText())
+                current.delete()
+            }
+        }.onFailure { Logger.w("Could not archive the crash report — ${it.message}") }
     }
 
+    /** The most recent report, seen or not — what Settings → Diagnostics shows. */
+    fun lastReport(): String? = read() ?: runCatching {
+        archiveFile()?.takeIf { it.exists() }?.readText()?.ifBlank { null }
+    }.getOrNull()
+
     private fun file(): File? = appContext?.let { File(it.filesDir, FILE_NAME) }
+
+    private fun archiveFile(): File? = appContext?.let { File(it.filesDir, ARCHIVE_NAME) }
 
     private fun write(report: String) {
         val target = file() ?: return

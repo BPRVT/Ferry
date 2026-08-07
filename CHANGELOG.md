@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.4.0] - 2026-08-06
+
+### Fixed
+
+- **Dismissing a crash report deleted it.** The single worst call in the diagnostics work so
+  far, and it was found the only way it could be: a real crash, on real hardware, whose
+  report was gone before it could be read.
+
+  The entire purpose of a crash report here is to be *sent to someone*. Glancing at it on a
+  television is not the same as having got it off the device — and one keypress, including
+  the accidental one that closes an overlay you were not expecting, permanently destroyed
+  the only copy of evidence for a failure that can take days to reproduce.
+
+  Reports are now archived rather than deleted. Being "seen" only stops one appearing
+  unprompted at launch, which is all it ever needed to mean; the report stays available
+  under **Settings → Diagnostics** until a newer crash replaces it. The only thing that
+  discards a report now is another report.
+
+- **The diagnostics URL was invisible** (also in 7.3.1). It was a footer, appended after a
+  300-line report, on a screen where every keypress dismissed the overlay and nothing
+  scrolled it — so the one thing the feature exists to deliver sat several screens below the
+  fold, unreachable by design. It is now the first thing on screen. Up and Down scroll; any
+  other key closes.
+
+### Note on upgrading
+
+`adb install -r` upgrades in place and **keeps app-private data**, so a stored crash report
+survives the upgrade. Uninstalling is the only thing that destroys it.
+
+---
+
 ## [7.3.1] - 2026-08-06
 
 ### Fixed

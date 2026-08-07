@@ -260,7 +260,9 @@ class MainActivity : AppCompatActivity() {
         diagnosticServer?.stop()
         diagnosticServer = null
         // Only a stored crash report is consumed by being read. The live view owns nothing.
-        if (showingStoredCrashReport) com.ferry.receiver.util.CrashReporter.clear()
+        // Marked seen, NOT deleted — it stays reachable under Settings > Diagnostics until a
+        // newer crash replaces it. See CrashReporter.markSeen for why that distinction matters.
+        if (showingStoredCrashReport) com.ferry.receiver.util.CrashReporter.markSeen()
         showingStoredCrashReport = false
         // Put the container back the way the current session wants it. Leaving it VISIBLE would
         // paint a black sheet over the home screen; forcing it GONE would blank a live mirror.
