@@ -213,6 +213,8 @@ class MirrorStreamServer(
     // than the problem.
     private var lastFramesIn = 0
     private var lastFramesShown = 0
+    /** Consecutive watchdog rebuilds that did not put a single frame on screen. */
+    private var consecutiveStallRebuilds = 0
     private var lastFramesLost = 0
     private var degradedTicks = 0
     private var lastRecycleMs = 0L
@@ -580,6 +582,10 @@ class MirrorStreamServer(
             // See StreamStats.videoShownFps for why this is the number that was missing.
             val shownNow = StreamStats.videoShown
             StreamStats.videoShownFps = (shownNow - lastFramesShown).coerceAtLeast(0)
+            // A frame reaching the screen is the only proof a rebuild worked, so it is the only
+            // thing that clears the escalation counter. Clearing it on anything else — a rebuild
+            // completing, frames arriving — is what would let the loop below run forever again.
+            if (shownNow > lastFramesShown) consecutiveStallRebuilds = 0
             lastFramesShown = shownNow
 
             // Rule 1c: the pipeline is losing frames steadily. Escalate — rebuild, then recycle.
@@ -596,8 +602,41 @@ class MirrorStreamServer(
             StreamStats.watchdogRecoveries++
             StreamStats.watchdogLastReason = reason
             StreamStats.watchdogLastMs = now
+
+            // A rebuild that changed nothing means rebuilding is the wrong remedy — escalate.
+            //
+            // **Reported from hardware, and the log is unambiguous: 179 rebuilds, one a second, for
+            // seven minutes.** The user paused an iPad video for several minutes and resumed it;
+            // audio came back, the picture stayed frozen on the paused frame, and this rule sat there
+            // rebuilding the decoder forever without ever escalating.
+            //
+            // It could not have worked, and the reason is worth stating exactly. A freshly built
+            // H.264 decoder has no reference picture, so it can produce **nothing at all** until an
+            // IDR arrives — and on a resume iOS may not send one for a very long time. Every frame
+            // arriving in the meantime is a P-frame predicting from pictures this decoder never had.
+            // So each rebuild produced a decoder in precisely the state that cannot recover, and the
+            // next tick built another one. `no keyframe for 3000ms — resuming decode` fired over and
+            // over in that log, which is this exact situation: feeding predicted frames to a codec
+            // that has no reference to predict from.
+            //
+            // Ending the session is the only remedy that reaches the cause, because a fresh SETUP
+            // makes the sender start a new stream — which begins with a keyframe. It is also exactly
+            // what the user does by hand when they stop and restart the share, and they have already
+            // confirmed that works.
+            consecutiveStallRebuilds++
+            if (Companion.shouldRecycleAfterStall(consecutiveStallRebuilds, now, lastRecycleMs)) {
+                lastRecycleMs = now
+                consecutiveStallRebuilds = 0
+                StreamStats.watchdogLastReason = "$reason — session recycled"
+                Logger.w("Watchdog: $consecutiveStallRebuilds decoder rebuilds changed nothing " +
+                    "($reason) — a decoder with no keyframe cannot recover by being rebuilt. Ending " +
+                    "the session so the sender starts a new stream, which begins with one.")
+                onStreamDead()
+                continue
+            }
             Logger.w("Watchdog: no frame shown for ${(now - maxOf(StreamStats.videoLastShownMs, firstArrivalMs))}ms " +
-                "while frames are still arriving ($reason) — forcing a decoder rebuild")
+                "while frames are still arriving ($reason) — forcing a decoder rebuild " +
+                "(attempt $consecutiveStallRebuilds of $STALL_REBUILDS_BEFORE_RECYCLE)")
             forceRebuild = true
         }
     }
@@ -830,7 +869,16 @@ class MirrorStreamServer(
         // SurfaceView made a new Surface). Without this, video stays black after foregrounding.
         val liveSurface = surfaceProvider()
         if (liveSurface !== configuredSurface) {
-            Logger.i("Mirror: surface ${if (liveSurface == null) "lost" else "changed"} — re-attaching decoder")
+            // "changed" only when there really was a surface to change from. [discardDecoder] nulls
+            // [configuredSurface] to force a rebuild, so after every watchdog recovery this branch is
+            // reached with the Surface perfectly intact — and it used to announce "surface changed",
+            // which sends anyone reading the log to investigate a Surface lifecycle that was never
+            // involved. In a captured log that false line appeared 179 times.
+            Logger.i("Mirror: " + when {
+                liveSurface == null -> "surface lost"
+                configuredSurface == null -> "no decoder attached"
+                else -> "surface changed"
+            } + " — re-attaching decoder")
             rebuildDecoder(liveSurface)
         }
         val d = decoder ?: return                              // need surface + SPS/PPS first
@@ -1191,6 +1239,33 @@ class MirrorStreamServer(
          * before a person would have reached for the remote.
          */
         private const val SESSION_SILENT_MS = 8_000L
+
+        /**
+         * How many fruitless decoder rebuilds to accept before ending the session instead.
+         *
+         * Small, because a rebuild that did not produce a frame is *evidence the remedy is wrong*,
+         * not an attempt that needs more patience — and the observed failure ran 179 of them. Large
+         * enough that a rebuild which genuinely needed a moment (the codec settling, a keyframe a
+         * second away) is not cut off before it can work.
+         */
+        private const val STALL_REBUILDS_BEFORE_RECYCLE = 5
+
+        /**
+         * Whether repeated failed rebuilds should escalate to ending the session.
+         *
+         * Shares [RECYCLE_MIN_INTERVAL_MS] with the frame-loss path deliberately: both end in the
+         * same visible reconnection, so a link bad enough to trigger both must still not produce one
+         * reconnect after another. Pure and `internal` so the escalation policy is testable without a
+         * TV — it tears down live sessions, which is the same bar every other rule here is held to.
+         */
+        internal fun shouldRecycleAfterStall(
+            consecutiveRebuilds: Int,
+            nowMs: Long,
+            lastRecycleMs: Long,
+        ): Boolean {
+            if (consecutiveRebuilds < STALL_REBUILDS_BEFORE_RECYCLE) return false
+            return nowMs - lastRecycleMs >= RECYCLE_MIN_INTERVAL_MS
+        }
 
         /**
          * Whether **both** halves of the session have gone quiet, with the socket still open.

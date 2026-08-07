@@ -11,6 +11,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.7.0] - 2026-08-07
+
+Pause an iPad video for a few minutes, resume it, and the audio comes back while the picture
+stays frozen on the paused frame. Reported as happening nine times out of ten.
+
+### Fixed
+
+- **The stall watchdog rebuilt the decoder forever instead of escalating.** The captured log
+  is unambiguous: **179 rebuilds, one a second, for seven minutes**, with frames arriving at
+  54 fps, zero queue drops, and not one frame reaching the screen.
+
+  None of those rebuilds could have worked, and the reason is worth stating exactly. A freshly
+  built H.264 decoder **has no reference picture**, so it produces nothing at all until an IDR
+  arrives — and on a resume iOS may not send one for a very long time. Every frame arriving in
+  the meantime is a P-frame predicting from pictures that decoder never had. So each rebuild
+  produced a decoder in precisely the state that cannot recover, and the next tick built
+  another one. `no keyframe for 3000ms — resuming decode` fired over and over throughout that
+  log, which is this situation exactly: feeding predicted frames to a codec with no reference
+  to predict from.
+
+  A rebuild that produced no frame is **evidence the remedy is wrong**, not an attempt that
+  needs more patience. After five fruitless rebuilds Ferry now ends the session instead, so the
+  sender starts a new stream — and a new stream begins with a keyframe. That is the same remedy
+  the user had been applying by hand by stopping and restarting the share, which they had
+  already confirmed works. Rate-limited to one a minute, sharing the limit with the frame-loss
+  path, so a persistently bad session degrades into a poor picture rather than a reconnect loop.
+
+  Only a frame actually reaching the screen clears the counter. Clearing it on anything
+  else — a rebuild completing, frames arriving — is what would let the loop run forever again.
+
+- **`Mirror: surface changed` was a lie, 179 times in one log.** `discardDecoder` nulls the
+  configured surface to force a rebuild, so every watchdog recovery reached that branch with the
+  Surface perfectly intact and announced a change that never happened — sending anyone reading
+  the log to investigate a Surface lifecycle that was not involved.
+
+### Added
+
+- **A "Copy all" button** on the diagnostics page served to your phone. Selecting several
+  hundred lines of monospaced text by dragging is genuinely unpleasant, and it is the last step
+  of every report, so it is the step worth removing. The button copies the report and nothing
+  else — no headers, no chrome, exactly what gets pasted. `/raw` still serves bare text for
+  `curl`, and the page falls back to selecting the text where the clipboard API is unavailable,
+  so it is never a dead end.
+
+---
+
 ## [7.6.0] - 2026-08-07
 
 The choppiness, and the reason no counter could see it.
