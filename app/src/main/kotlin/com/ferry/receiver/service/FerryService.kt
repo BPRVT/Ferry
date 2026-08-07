@@ -107,12 +107,20 @@ class FerryService : Service() {
     // Settings — read once when starting, re-read on restart
     private lateinit var settingsRepository: SettingsRepository
 
+    /**
+     * Keeps the Wi-Fi radio out of power-save while receivers are up. Created in [onCreate] and
+     * held for exactly as long as the receivers are running — see [WifiPerformanceLock] for why a
+     * receiving-only app is the case the driver's power-save heuristic gets wrong.
+     */
+    private lateinit var wifiLock: com.ferry.receiver.util.WifiPerformanceLock
+
     // ─── Service Lifecycle ───────────────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
         Logger.i("FerryService created")
         settingsRepository = SettingsRepository(applicationContext)
+        wifiLock = com.ferry.receiver.util.WifiPerformanceLock(applicationContext)
         createNotificationChannel()
     }
 
@@ -240,6 +248,11 @@ class FerryService : Service() {
 
         _serviceState.value = ServiceState.Running
         updateNotification(isRunning = true)
+
+        // Before any receiver binds a socket: a receiving-only app is exactly the case Wi-Fi
+        // power-save mishandles, and the bursty delivery it causes is indistinguishable from a slow
+        // decoder from the couch. Released in [stopAllReceiversInternal].
+        wifiLock.acquire()
 
         if (settings.airPlayEnabled) startAirPlay(settings)
 
@@ -395,6 +408,9 @@ class FerryService : Service() {
     private fun stopAllReceiversInternal() {
         try { airPlayReceiver?.stop() } catch (e: Exception) { Logger.e("AirPlay stop error", e) }
         try { optionalProtocols?.stop() } catch (e: Exception) { Logger.e("Optional protocol stop error", e) }
+        // Nothing is listening any more, so stop keeping the radio awake for it. `lateinit`, and
+        // onDestroy can land before onCreate on a service that failed to start, hence the guard.
+        if (::wifiLock.isInitialized) wifiLock.release()
         airPlayReceiver = null
         optionalProtocols = null
         _airPlayState.value = ProtocolState.DISABLED

@@ -5,12 +5,13 @@ import com.ferry.receiver.airplay.StreamStats
 import com.ferry.receiver.airplay.VideoDecoder
 import com.ferry.receiver.util.Logger
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import java.io.InputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
@@ -70,6 +71,63 @@ class MirrorStreamServer(
     private val serverSocket = ServerSocket(0)            // OS-assigned free port
     private val queue = ArrayBlockingQueue<Item>(QUEUE_CAPACITY)
 
+    /**
+     * The video path's own three threads, rather than `Dispatchers.IO`.
+     *
+     * Two reasons, and the first is the one that matters.
+     *
+     * **Isolation.** `Dispatchers.IO` is a shared pool capped at 64 threads, and all three loops here
+     * spend their lives inside blocking socket calls. Anything else in the process that parks an IO
+     * thread and never returns — a leaked server, a socket nobody closed — permanently removes
+     * capacity from the same pool the video reader and decoder are drawn from. Once enough has
+     * accumulated, starting a cast means waiting for a thread that is never coming back, and the
+     * picture stutters for reasons that have nothing to do with video. `AirPlayReceiver`'s
+     * `reclaimMirrorSessionResources` fixes the leaks that were doing this; owning the threads means
+     * the *next* such oversight costs a bounded pool that dies with [stop] instead of shared capacity
+     * that does not.
+     *
+     * **Priority.** These are display-deadline threads. On a shared pool their priority cannot be
+     * raised without leaking that priority to whatever unrelated work runs there next; on their own
+     * it is simply correct, and it is what keeps the decoder scheduled ahead of background work when
+     * the SoC is busy — which on a stick is most of the time.
+     */
+    private val threads = Executors.newFixedThreadPool(WORKER_THREADS) { runnable ->
+        Thread({
+            runCatching {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
+            }
+            runnable.run()
+        }, "FerryMirror").apply { isDaemon = true }
+    }
+    private val dispatcher = threads.asCoroutineDispatcher()
+
+    /**
+     * Recycled buffers for decrypted frames — the largest allocation on the whole video path.
+     *
+     * `cipher.update(payload, 0, size)` returns a **freshly allocated array per frame**. At 1080p60
+     * that is roughly 60 arrays a second of tens to hundreds of kilobytes each: several megabytes per
+     * second of short-lived garbage, on a device whose heap has very little headroom. The cost is not
+     * the allocation, it is the collection — every GC steals CPU from the decoder thread, and the
+     * decoder thread missing its deadline is precisely what [decodeNalUnit] turns into a dropped
+     * frame and a corrupt picture. The reader already reuses its *encrypted* read buffer for exactly
+     * this reason ([readBufferFor]); the decrypted side was still allocating.
+     *
+     * It cannot be a single reused buffer, because a decrypted frame is handed to the decoder thread
+     * and outlives the reader's next iteration — hence a pool. A buffer is taken here, filled by the
+     * reader, and returned once the decoder has copied it into a MediaCodec input buffer (or once it
+     * is dropped, at either drop site). Running dry is not an error: it allocates, exactly as before.
+     *
+     * Thread-safe because both the reader (frames dropped at [enqueue]) and the decoder thread return
+     * buffers to it.
+     */
+    private val bufferPool = ArrayBlockingQueue<ByteArray>(FRAME_POOL_CAPACITY)
+
+    /**
+     * Size the pool's buffers are cut to — the largest frame seen so far, so a keyframe does not have
+     * to allocate. Only ever grows, and only the reader thread touches it.
+     */
+    private var frameBufferSize = INITIAL_PAYLOAD_BUFFER
+
     @Volatile private var running = false
     @Volatile private var client: Socket? = null
     @Volatile private var decoder: VideoDecoder? = null   // owned by the decoder thread
@@ -105,6 +163,12 @@ class MirrorStreamServer(
 
     /** Set by the watchdog, acted on by the decoder thread. See [runWatchdog]. */
     @Volatile private var forceRebuild = false
+
+    /**
+     * Set by the watchdog when the Surface has gone and the decoder should be handed back; acted on
+     * by the decoder thread, which is the only thread allowed to touch [decoder]. See [runWatchdog].
+     */
+    @Volatile private var releaseIdleDecoder = false
 
     /**
      * When the first frame of this stream arrived, for [isStalled] to measure against when nothing
@@ -161,9 +225,9 @@ class MirrorStreamServer(
         running = true
         StreamStats.videoQueueCapacity = QUEUE_CAPACITY
         publishDecoderState()
-        scope.launch(Dispatchers.IO) { runReader() }
-        scope.launch(Dispatchers.IO) { runDecoder() }
-        scope.launch(Dispatchers.IO) { runWatchdog() }
+        scope.launch(dispatcher) { runReader() }
+        scope.launch(dispatcher) { runDecoder() }
+        scope.launch(dispatcher) { runWatchdog() }
     }
 
     fun stop() {
@@ -171,6 +235,13 @@ class MirrorStreamServer(
         runCatching { client?.close() }
         runCatching { serverSocket.close() }
         queue.clear()
+        bufferPool.clear()
+        // shutdown(), never shutdownNow(). The three loops all exit on `running` within one poll
+        // timeout, and the decoder thread's `finally` has to reach `decoder.release()` on its way
+        // out — interrupting it mid-release is how you get a native SIGABRT out of libstagefright
+        // (the same hazard AudioStreamServer.stop documents). The pool terminates on its own once
+        // they return, and the threads are daemons, so nothing can hold the process open either way.
+        runCatching { threads.shutdown() }
         Logger.i("MirrorStreamServer stopped")
     }
 
@@ -219,8 +290,14 @@ class MirrorStreamServer(
                         // Offset/length form: [payload] is the shared buffer and may be longer than
                         // this frame, so the whole-array overload would decrypt stale tail bytes and
                         // desync the CTR keystream for every frame after it.
-                        val decrypted = cipher.update(payload, 0, payloadSize)
-                        val len = MirrorCrypto.avccToAnnexBInPlace(decrypted)
+                        // Decrypt INTO a recycled buffer rather than letting the cipher allocate a
+                        // fresh array per frame — see [bufferPool]. The buffer is usually longer
+                        // than the frame, which is why every step below is given an explicit
+                        // length: an in-place conversion or a NAL walk bounded by `array.size`
+                        // would read the tail of an *older* frame still sitting in the buffer.
+                        val decrypted = acquireFrameBuffer(payloadSize)
+                        val plainLen = cipher.update(payload, 0, payloadSize, decrypted, 0)
+                        val len = MirrorCrypto.avccToAnnexBInPlace(decrypted, plainLen)
                         if (len > 0) {
                             val flags = Companion.classify(decrypted, len)
                             enqueue(Frame(
@@ -228,6 +305,8 @@ class MirrorStreamServer(
                                 disposable = (flags and FLAG_DISPOSABLE) != 0,
                                 keyframe = (flags and FLAG_KEYFRAME) != 0,
                             ))
+                        } else {
+                            recycleFrameBuffer(decrypted)
                         }
                     }
                     1 -> parseConfig(payload, payloadSize)?.let { enqueue(it) }
@@ -278,16 +357,23 @@ class MirrorStreamServer(
         StreamStats.videoLastArrivalMs = arrivedMs
         if (firstArrivalMs == 0L) firstArrivalMs = arrivedMs
         if (!queue.offer(item)) {
+            // Every branch below destroys a frame, and each one is the last reference to that
+            // frame's buffer — so each one also returns it to the pool. Missing any of them would
+            // drain the pool exactly when the pipeline is under load and least able to absorb the
+            // allocations, which is the opposite of what it is for.
             if (item is Frame && item.disposable) {
                 framesDropped++                    // 1: refuse the newcomer, break nothing
+                recycleFrameBuffer(item.annexB)
                 StreamStats.videoQueue = queue.size
                 return
             }
             val victim = queue.firstOrNull { it is Frame && it.disposable }
             if (victim != null && queue.remove(victim)) {
                 framesDropped++                    // 2: evict a frame nothing references
+                recycleFrameBuffer((victim as Frame).annexB)
             } else {
-                queue.poll()                       // 3: nothing disposable — lose a reference
+                val evicted = queue.poll()         // 3: nothing disposable — lose a reference
+                (evicted as? Frame)?.let { recycleFrameBuffer(it.annexB) }
                 framesDropped++
                 awaitingKeyframe = true            // reference-broken — resync at the next IDR
                 resyncArmSeq++                     // tell the decoder thread this arming is new
@@ -300,7 +386,9 @@ class MirrorStreamServer(
             val now = System.currentTimeMillis()
             if (lastStatMs != 0L) StreamStats.videoFps = (300_000L / (now - lastStatMs).coerceAtLeast(1)).toInt()
             lastStatMs = now
-            StreamStats.videoDropPct = framesDropped * 100 / framesIn
+            // Long arithmetic: `framesDropped * 100` overflows Int past ~21M dropped frames, which a
+            // long-running session can reach, and the percentage then goes negative.
+            StreamStats.videoDropPct = (framesDropped.toLong() * 100 / framesIn).toInt()
             // decoderDrops/keyframeDrops are written on the decoder thread, so read them back
             // through StreamStats' volatile fields rather than the plain ints behind them.
             Logger.i("Video stats: in=$framesIn dropped=$framesDropped " +
@@ -324,6 +412,38 @@ class MirrorStreamServer(
         val grown = ByteArray(size)
         if (size <= MAX_RETAINED_BUFFER) readBuffer = grown
         return grown
+    }
+
+    /**
+     * Takes a buffer of at least [size] bytes from [bufferPool] for one decrypted frame.
+     *
+     * Buffers are cut to [frameBufferSize] — the largest frame seen so far — rather than to the
+     * frame in hand, so the pool converges on a single size and a keyframe (much larger than the
+     * predicted frames around it) does not force an allocation every time one arrives. Pooled
+     * buffers cut before the last growth are simply discarded as they come up, which settles within
+     * one pass of the pool.
+     *
+     * Reader thread only; [frameBufferSize] needs no synchronisation because of it.
+     */
+    private fun acquireFrameBuffer(size: Int): ByteArray {
+        if (size > frameBufferSize) frameBufferSize = size
+        while (true) {
+            val pooled = bufferPool.poll() ?: break
+            if (pooled.size >= frameBufferSize) return pooled
+        }
+        return ByteArray(frameBufferSize)
+    }
+
+    /**
+     * Returns a decrypted-frame buffer for reuse, once nothing can still be reading it.
+     *
+     * Outsized buffers are dropped rather than pooled, for the same reason [readBufferFor] refuses
+     * to retain them: one freak frame should not pin megabytes for the rest of the session. The
+     * offer is allowed to fail — a full pool means we already have all the buffers we need.
+     */
+    private fun recycleFrameBuffer(buffer: ByteArray) {
+        if (buffer.size > MAX_RETAINED_BUFFER) return
+        bufferPool.offer(buffer)
     }
 
     private fun parseConfig(payload: ByteArray, size: Int): Config? =
@@ -369,6 +489,30 @@ class MirrorStreamServer(
                         "sender re-establishes it")
                     onStreamDead()
                 }
+                continue
+            }
+
+            // Rule 1b: there is no Surface to draw to, so give the hardware decoder back.
+            //
+            // A MediaCodec is not an in-process object — it is one of a handful of AVC decoder
+            // instances the whole device has, and on a stick that handful is very small. Holding one
+            // while Ferry has nothing to draw on means the next app to want a decoder (or Ferry's own
+            // next session) contends for, or fails to get, hardware that is doing nothing.
+            //
+            // [decodeFrame] already rebuilds against a null Surface, so this only covers the case it
+            // cannot reach: the Surface has gone AND no frames are arriving to notice it with. That
+            // is the ordinary shape of backgrounding Ferry mid-cast on a paused sender, which iOS
+            // will happily leave in place for as long as the screen is static.
+            //
+            // Sitting AHEAD of rule 2 matters just as much as what it does. With no Surface, "frames
+            // are arriving and none is reaching the screen" is not a fault, it is the definition of
+            // the situation — so rule 2 used to match, every tick, for as long as the app stayed
+            // backgrounded with a live cast (which is what `receiveWhenClosed` is for). That is a
+            // decoder rebuild every few seconds, forever, each one counted on the HUD as a watchdog
+            // recovery from a stall that was never happening.
+            if (surfaceProvider() == null && decoder != null) {
+                Logger.i("Watchdog: no Surface to render to — releasing the hardware decoder until one returns")
+                releaseIdleDecoder = true
                 continue
             }
 
@@ -424,11 +568,28 @@ class MirrorStreamServer(
                     discardDecoder()
                     nextRebuildAllowedNs = 0L
                 }
+                // Hand the hardware decoder back while there is no Surface for it (see [runWatchdog]
+                // rule 1b). The backoff [discardDecoder] arms is cleared straight afterwards for the
+                // same reason it is under forceRebuild: it exists to stop a *failing* decoder
+                // thrashing, and this is not a failure — making the return from background wait it
+                // out would just be a second of black picture for nothing.
+                if (releaseIdleDecoder) {
+                    releaseIdleDecoder = false
+                    if (decoder != null) {
+                        discardDecoder()
+                        nextRebuildAllowedNs = 0L
+                    }
+                }
                 val item = queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
                 try {
                     when (item) {
                         is Config -> configureDecoder(item.sps, item.pps)
-                        is Frame -> decodeFrame(item)
+                        // `decodeNalUnit` copies the frame into the codec's own input buffer before
+                        // it returns, so the moment decodeFrame is done — accepted, dropped, or
+                        // thrown out of — nothing can still be reading this buffer and it goes back
+                        // to the pool. The `finally` covers the throw, which is the path that would
+                        // otherwise leak a buffer on every decoder failure.
+                        is Frame -> try { decodeFrame(item) } finally { recycleFrameBuffer(item.annexB) }
                     }
                 } catch (e: Exception) {
                     if (!running) break
@@ -691,6 +852,21 @@ class MirrorStreamServer(
          * crackle, so audio gets the deeper cushion.
          */
         private const val QUEUE_CAPACITY = 16
+
+        /** Reader, decoder, watchdog — one thread each, and no more. See [threads]. */
+        private const val WORKER_THREADS = 3
+
+        /**
+         * Decrypted-frame buffers kept for reuse. See [bufferPool].
+         *
+         * Sized against the queue depth Ferry actually runs at, not against [QUEUE_CAPACITY]. A full
+         * episode of real mirroring reported a depth of 1 out of 16 essentially throughout, so eight
+         * covers the in-flight frames with room for a burst; the queue is allowed to reach 16, but
+         * only transiently, and the few extra buffers a burst needs are worth allocating rather than
+         * holding 16 large arrays permanently on a device this size. Overshoot costs memory, and
+         * undershoot costs an allocation — the same one that used to happen every single frame.
+         */
+        private const val FRAME_POOL_CAPACITY = 8
 
         /**
          * How long the decoder will skip frames waiting for a keyframe before giving up and

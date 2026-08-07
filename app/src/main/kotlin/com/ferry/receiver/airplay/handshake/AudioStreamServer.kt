@@ -12,7 +12,7 @@ import com.ferry.receiver.util.AudioGain
 import com.ferry.receiver.util.Logger
 import com.ferry.receiver.util.LoudnessBoost
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -122,12 +122,29 @@ class AudioStreamServer(
     /** UDP control port (returned in the SETUP response; macOS won't send audio without it). */
     val controlPort: Int get() = controlSocket.localPort
 
+    /**
+     * This server's own three threads, for the same reason [MirrorStreamServer] owns its own: all
+     * three loops live inside blocking socket or AudioTrack calls, and on the shared `Dispatchers.IO`
+     * pool they compete for its 64-thread budget with every other blocking call in the process —
+     * including any that leaked and will never give a thread back. The playback thread in particular
+     * must not wait to be scheduled: it is the one writing to the DAC, and late is audible.
+     */
+    private val threads = java.util.concurrent.Executors.newFixedThreadPool(WORKER_THREADS) { runnable ->
+        Thread({
+            runCatching {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+            }
+            runnable.run()
+        }, "FerryAudio").apply { isDaemon = true }
+    }
+    private val dispatcher = threads.asCoroutineDispatcher()
+
     fun start(scope: CoroutineScope) {
         running = true
         StreamStats.audioActive = true
-        scope.launch(Dispatchers.IO) { runPlayback() }   // decode + play (may block on AudioTrack)
-        scope.launch(Dispatchers.IO) { runReceive() }    // drain socket fast (never blocks on audio)
-        scope.launch(Dispatchers.IO) { runControl() }    // capture sender addr + handle resend replies
+        scope.launch(dispatcher) { runPlayback() }   // decode + play (may block on AudioTrack)
+        scope.launch(dispatcher) { runReceive() }    // drain socket fast (never blocks on audio)
+        scope.launch(dispatcher) { runControl() }    // capture sender addr + handle resend replies
     }
 
     /**
@@ -172,6 +189,12 @@ class AudioStreamServer(
         // this thread races decodeFrame on the playback thread and crashes the whole process with a
         // native SIGABRT ("pthread_mutex_destroy called on a destroyed mutex" inside libstagefright).
         // Flipping `running` makes the playback loop exit within one poll timeout and clean up safely.
+        //
+        // shutdown(), never shutdownNow(), for exactly that reason: an interrupt here would land in
+        // the middle of the playback thread's release sequence, which is the race the note above
+        // exists to avoid. The pool terminates by itself once the three loops return, and its threads
+        // are daemons, so it can never hold the process open.
+        runCatching { threads.shutdown() }
     }
 
     /** Receive thread: pull RTP packets off the data socket and feed them to the reorder buffer. */
@@ -499,6 +522,9 @@ class AudioStreamServer(
          * Deliberately the deeper of the two: an underrun here is an audible crackle, whereas a
          * late video frame is invisible.
          */
+        /** Receive, control, playback — one thread each, and no more. See [threads]. */
+        private const val WORKER_THREADS = 3
+
         private const val AUDIO_QUEUE_CAPACITY = 32
 
         /**

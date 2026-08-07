@@ -11,6 +11,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.0.0] - 2026-08-06
+
+Every release up to here fixed something that broke. This one fixes something that
+*wore out*.
+
+Reported from hardware: Ferry is good for about a day, and by the second day the
+picture is laggy and never catches up — with a Wi-Fi link that is admittedly not
+great, but an iPad on the same network playing the same content at full speed. And
+one more observation, which turned out to be the whole diagnosis: reinstalling the
+app makes it "like new" every time.
+
+### Fixed
+
+- **Ferry got slower the longer it had been running.** The reinstall was the clue,
+  and it is not a cache — Ferry persists almost nothing, a handful of preferences
+  and a small settings store, none of which could slow anything down. What a
+  reinstall actually does is **restart the process**. A force-stop does the same.
+
+  Every `start*` in `AirPlayReceiver` assigned straight over its field —
+  `mirrorServer`, `audioServer`, `ntpClient`, `eventSocket`, `videoDecoder`,
+  `audioPlayer` — on the assumption that a SETUP only ever arrives on a fresh
+  session. It does not. Senders re-SETUP streams on a *live* session; that is the
+  entire point of the dynamic add/remove path Ferry already supports, and it is
+  what happens every time audio stops and starts again. A control connection that
+  drops without a TEARDOWN is likewise followed by one that begins again at the key
+  exchange. **Dropping the reference does not stop the object.**
+
+  The threads are the expensive part, and the reason this reads as a performance
+  bug rather than a memory one. All of those loops are `Dispatchers.IO` coroutines
+  parked inside *blocking* socket calls, and `Dispatchers.IO` is capped at 64
+  threads. Cancelling a scope cannot reclaim them — cancellation is cooperative,
+  and a thread sitting in `accept()` never checks. So every orphan permanently
+  removes capacity from the shared pool, and once enough have accumulated, starting
+  a cast means waiting on threads that are never coming back. The video reader and
+  decoder are drawn from that same pool.
+
+  The orphaned watchdogs made it worse than merely wasteful. Each one went on
+  polling `isStreamDead` on a dead connection and calling `endActiveSession()` — on
+  the session that had *replaced* it.
+
+  Ferry now stops what it is replacing, at every one of those call sites.
+
+- **A backgrounded Ferry rebuilt its decoder every few seconds, forever.** With
+  background receiving on and a cast still live, the stall watchdog's rule — frames
+  arriving, nothing reaching the screen — is not a fault when there is no Surface
+  to reach. It is the definition of the situation. It matched on every tick, and
+  each match was a decoder rebuild counted on the overlay as a recovery from a
+  stall that was never happening.
+
+### Changed
+
+- **The video and audio paths own their threads.** Three each, named `FerryMirror`
+  and `FerryAudio`, at display and audio priority, shut down with the server that
+  owns them. Two reasons, in order of importance. Isolation: the video path can no
+  longer be starved by anything else in the process that parks a shared IO thread,
+  so a future oversight costs a bounded pool that dies with `stop()` rather than
+  shared capacity that does not. Priority: these are display-deadline threads, and
+  on a shared pool their priority cannot be raised without leaking it to whatever
+  unrelated work runs there next.
+
+  They are shut down with `shutdown()` and never `shutdownNow()` — an interrupt
+  would land in the middle of the decoder-release path, which is the documented
+  route to a native SIGABRT out of libstagefright.
+
+- **Decrypted frames come from a pool instead of the allocator.** `cipher.update()`
+  returned a freshly allocated array for every frame: at 1080p60, roughly 60 arrays
+  a second of tens to hundreds of kilobytes — several megabytes per second of
+  short-lived garbage on a heap with very little headroom. The cost is not the
+  allocation, it is the collection, because every GC steals CPU from the decoder
+  thread, and a decoder thread that misses its deadline is exactly what turns into
+  a dropped frame and a corrupt picture. The reader already reused its *encrypted*
+  buffer for this reason; the decrypted side was still allocating.
+
+  This is why `avccToAnnexBInPlace` now takes an explicit length. A pooled buffer is
+  sized to the largest frame seen so far, so it is routinely longer than the frame
+  in it and the tail still holds the previous frame's bytes. Walking to `data.size`
+  would find that older frame's perfectly well-formed length prefix past the end of
+  this one and splice a NAL made of stale video onto a good frame — silently, with
+  nothing counted and nothing thrown. Three tests fail if that bound reverts.
+
+- **The hardware decoder is handed back when there is no Surface to draw to.** A
+  MediaCodec is not an in-process object; it is one of a handful of AVC decoder
+  instances the whole device has, and on a stick that handful is very small.
+  Holding one while Ferry has nothing to render means the next app to want a
+  decoder — or Ferry's own next session — contends for hardware that is idle.
+
+- **Wi-Fi power-save is held off while receiving.** The driver's heuristic reads a
+  receive-only app as idle, because it is not transmitting, and sleeps the radio
+  between beacon intervals. That converts a steady stream into bursts: a frame
+  arriving late and then three at once, compounding on a marginal link. It is also
+  why a sender on the same network can look perfectly fine while the TV does not —
+  an iPad playing the video is transmitting constantly and is never a candidate for
+  this. Ferry now takes a `WIFI_MODE_FULL_LOW_LATENCY` lock (`HIGH_PERF` below API
+  29) for exactly as long as its receivers are up. Requires the `WAKE_LOCK`
+  permission, which is what `acquireWifiLock` is gated on; nothing here keeps the
+  CPU or the screen awake.
+
+- **Overlay counters describe the current session.** `StreamStats.resetStreams()`
+  existed and was never called, so `SHOW`, `skip` and the watchdog line were running
+  totals across every cast since the app started — and the entire purpose of those
+  numbers is to answer what is happening right now.
+
+### Note
+
+The diagnosis above is reasoned from the code and cannot be confirmed without the
+device. The experiment that settles it costs nothing: **next time it degrades,
+force-stop Ferry rather than reinstalling.** If that restores it, this release is
+aimed correctly. If only a full reboot does, something is leaking device-wide and
+the decoder instances are the first suspect. If neither helps, it is the network,
+and none of this is the story.
+
+---
+
 ## [6.8.0] - 2026-08-05
 
 6.7.0 made the video recover. This makes the audio recover with it.

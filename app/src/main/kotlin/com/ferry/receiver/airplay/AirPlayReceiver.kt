@@ -345,6 +345,10 @@ class AirPlayReceiver(
             return
         }
 
+        // A MediaCodec is a scarce, process-external resource — a Fire TV stick has only a handful of
+        // AVC decoder instances for the whole system. Replacing this field without releasing the old
+        // one hands one of them to the kernel driver until the process dies.
+        videoDecoder?.let { Logger.w("Legacy video decoder replaced while live — releasing the old one"); it.release() }
         videoDecoder = VideoDecoder(surface).also { decoder ->
             decoder.initialize(sps, pps, DEFAULT_VIDEO_WIDTH, DEFAULT_VIDEO_HEIGHT)
             rtspHandler?.onVideoNalUnit = { nalUnit, ptsUs ->
@@ -362,6 +366,12 @@ class AirPlayReceiver(
      * This prevents a zero-key cipher from producing garbage audio (S6-4 fix).
      */
     private fun startAudioPlayer(session: SessionDescription) {
+        // As in [startVideoDecoder]: an AudioPlayer owns an AudioTrack and a MediaCodec, so dropping
+        // the reference without releasing it strands both until the process dies.
+        audioPlayer?.let { Logger.w("Legacy audio player replaced while live — releasing the old one"); it.release() }
+        // A second RECORD would otherwise fail to bind AUDIO_RTP_PORT and leave the session silent.
+        try { audioSocket?.close() } catch (e: Exception) { /* non-fatal */ }
+        audioSocket = null
         audioPlayer = AudioPlayer().also { player ->
             player.initialize(
                 aesKey     = session.aesKey.takeIf { session.isAudioEncrypted },
@@ -428,6 +438,15 @@ class AirPlayReceiver(
         remoteAddress: java.net.InetAddress,
         senderTimingPort: Int,
     ): Pair<Int, Int> {
+        // Reclaim whatever the previous mirror session left behind before standing a new one up.
+        // See [reclaimMirrorSessionResources] — this is the entry point a second SETUP arrives at,
+        // and every field it touches used to be overwritten in place with the old object still live.
+        reclaimMirrorSessionResources("mirror SETUP keys")
+        // Counters describe THIS session. They are cumulative within a MirrorStreamServer, but the
+        // ones that outlive it (videoShown, videoRenderSkips, watchdog*) were never cleared, so the
+        // HUD reported a running total across every cast since the app started — and the whole point
+        // of those numbers is to answer "what is happening right now?".
+        StreamStats.resetStreams()
         mirrorAesKey = aesKey
         mirrorEcdhSecret = ecdhSecret
         mirrorAesIv = aesIv
@@ -465,6 +484,14 @@ class AirPlayReceiver(
     private fun startMirrorStream(streamConnectionId: Long): Int {
         val aesKey = mirrorAesKey ?: run { Logger.e("mirror stream start before keys set"); return 0 }
         val ecdhSecret = mirrorEcdhSecret ?: return 0
+        // Stop the previous video server before replacing it. Assigning over [mirrorServer] does not
+        // stop the old one — it leaves a live reader blocked in accept(), a decoder thread, a
+        // watchdog, a ServerSocket and (once it had built one) a MediaCodec instance running for the
+        // rest of the process. See [reclaimMirrorSessionResources] for why that is expensive.
+        mirrorServer?.let {
+            Logger.w("Mirror video re-SETUP on a live session — stopping the previous server first")
+            it.stop()
+        }
         return MirrorStreamServer(
             aesKey, ecdhSecret, streamConnectionId, videoSurfaceProvider, mirrorWidth, mirrorHeight,
             // The video stream died and cannot be revived in place, so end the RTSP session. Without
@@ -483,6 +510,14 @@ class AirPlayReceiver(
         val aesKey = mirrorAesKey ?: run { Logger.e("audio start before keys set"); return 0 to 0 }
         val ecdhSecret = mirrorEcdhSecret ?: return 0 to 0
         val aesIv = mirrorAesIv ?: return 0 to 0
+        // Same reason as [startMirrorStream]: macOS and iOS both re-SETUP the audio stream on a live
+        // session (audio stopping and starting again is a stream-level TEARDOWN + SETUP, not a new
+        // session), and overwriting the field left the old server's three threads, two UDP sockets,
+        // AAC decoder and AudioTrack running forever.
+        audioServer?.let {
+            Logger.w("Mirror audio re-SETUP on a live session — stopping the previous server first")
+            it.stop()
+        }
         val server = AudioStreamServer(aesKey, ecdhSecret, aesIv, sampleRate, channels, codecType, framesPerPacket)
             .also { audioServer = it; it.start(scope) }
         audioPlaying = true
@@ -551,6 +586,55 @@ class AirPlayReceiver(
         clearNowPlayingMetadata()
         emitNowPlaying()
         Logger.i("Buffered audio stream stopped")
+    }
+
+    /**
+     * Tears down anything still running from a previous mirror session, before a new one replaces it.
+     *
+     * **Why this exists at all.** Every `start*` below used to assign straight over its field —
+     * `mirrorServer = …`, `audioServer = …`, `ntpClient = …`, `eventSocket = …` — on the assumption
+     * that a SETUP only ever arrives on a fresh session. It does not: senders re-SETUP streams on a
+     * live session (that is the whole point of the dynamic add/remove path
+     * [handleTeardownInternal][RtspHandler] supports), and a control connection that drops without a
+     * TEARDOWN is followed by a new one that starts again from the key exchange.
+     *
+     * Dropping the reference does not stop the object. What was left behind, per orphaned session:
+     * a [MirrorStreamServer] reader blocked in `accept()`, its decoder thread, its watchdog, an
+     * [AudioStreamServer]'s receive/control/playback threads, an [AirPlayNtpClient] still sending UDP
+     * to the sender every two seconds, plus the sockets, the MediaCodec instances and the AudioTrack
+     * they own.
+     *
+     * The threads are the expensive part, and the reason this reads as a *performance* bug rather
+     * than a memory one. All of them are `Dispatchers.IO` coroutines parked in blocking socket calls,
+     * and `Dispatchers.IO` is capped at 64 threads. Cancelling a scope cannot reclaim them —
+     * cancellation is cooperative and a thread inside `accept()` never checks. So each orphan
+     * permanently consumes shared threads, and once enough have accumulated, *new* coroutines — the
+     * video reader and decoder among them — queue behind threads that will never come back. That is
+     * an app which works, then gets slower the longer it has been up, and comes back "like new" after
+     * anything that restarts the process (a reinstall, a force-stop, a reboot). It is also why the
+     * orphaned watchdogs made it worse rather than merely wasteful: each one goes on polling
+     * `isStreamDead`, and calls `onStreamDead` → `endActiveSession()` on the session that replaced it.
+     *
+     * [MirrorStreamServer] and [AudioStreamServer] now own their threads outright, so a future
+     * oversight here costs a bounded, named pool instead of shared IO capacity — but the fix for the
+     * leak is to stop them, which is what this does.
+     */
+    private fun reclaimMirrorSessionResources(reason: String) {
+        val live = listOfNotNull(
+            mirrorServer?.let { "video" }, audioServer?.let { "audio" },
+            bufferedAudioServer?.let { "buffered-audio" }, ntpClient?.let { "ntp" },
+            eventSocket?.let { "event" },
+        )
+        if (live.isEmpty()) return
+        Logger.w("$reason on a session that still has ${live.joinToString(", ")} running — reclaiming")
+        mirrorServer?.stop(); mirrorServer = null
+        audioServer?.stop(); audioServer = null
+        bufferedAudioServer?.stop(); bufferedAudioServer = null
+        ntpClient?.stop(); ntpClient = null
+        try { eventClientSocket?.close() } catch (e: Exception) { /* non-fatal */ }
+        eventClientSocket = null
+        try { eventSocket?.close() } catch (e: Exception) { /* non-fatal */ }
+        eventSocket = null
     }
 
     /** Clears the video NAL callback, closes the audio socket, and releases media components. */

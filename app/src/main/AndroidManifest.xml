@@ -32,6 +32,14 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!--
+        WAKE_LOCK — required by WifiManager.acquireWifiLock, which is what keeps the Wi-Fi radio out
+        of power-save while Ferry is receiving. See util/WifiPerformanceLock.kt: a receive-only app
+        looks idle to the driver's power-save heuristic, which turns steady video into bursts. This
+        does NOT keep the CPU or the screen awake — the streaming activity does that with
+        FLAG_KEEP_SCREEN_ON, and nothing here takes a PowerManager wake lock.
+    -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Foreground service — keeps receiver alive when app is in background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

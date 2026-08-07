@@ -51,17 +51,24 @@ object MirrorCrypto {
      * malformed record: everything up to that point is valid and is kept, matching the previous
      * behaviour of stopping at the first bad length.
      *
+     * [length] is how many bytes of [data] belong to this frame, which is **not** `data.size`: the
+     * caller decrypts into a pooled buffer that is usually longer than the frame in it. Bounding the
+     * walk by the array instead would read the tail of an older frame still sitting in the buffer,
+     * find a plausible-looking length prefix in it, and append a NAL unit made of stale bytes to a
+     * perfectly good frame. Same hazard, and same fix, as `MirrorStreamServer.parseSpsPps`.
+     *
      * @return count of usable bytes from index 0, or 0 if nothing parsed.
      */
-    fun avccToAnnexBInPlace(data: ByteArray): Int {
+    fun avccToAnnexBInPlace(data: ByteArray, length: Int = data.size): Int {
+        val end = length.coerceIn(0, data.size)
         var i = 0
-        while (i + 4 <= data.size) {
+        while (i + 4 <= end) {
             val len = ((data[i].toInt() and 0xFF) shl 24) or
                 ((data[i + 1].toInt() and 0xFF) shl 16) or
                 ((data[i + 2].toInt() and 0xFF) shl 8) or
                 (data[i + 3].toInt() and 0xFF)
             // A malformed or truncated record ends the frame; keep everything before it.
-            if (len <= 0 || i + 4 + len > data.size) return i
+            if (len <= 0 || i + 4 + len > end) return i
             // Overwrite the 4-byte length prefix with the 4-byte start code, leaving the NAL payload
             // that follows exactly where it already is.
             data[i] = 0; data[i + 1] = 0; data[i + 2] = 0; data[i + 3] = 1
