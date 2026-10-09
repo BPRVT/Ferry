@@ -44,11 +44,11 @@ class SettingsFragment : Fragment() {
     private lateinit var settingsRepository: SettingsRepository
 
     // Section header TextViews — set via include layout tag IDs
-    private lateinit var headerDisplay: TextView
-    private lateinit var headerProtocols: TextView
-    private lateinit var headerAirPlay: TextView
-    private lateinit var headerService: TextView
-    private lateinit var headerDeveloper: TextView
+    private lateinit var headerGeneral: TextView
+    private lateinit var headerPictureSound: TextView
+    private lateinit var headerWeakWifi: TextView
+    private lateinit var headerConnections: TextView
+    private lateinit var headerTroubleshooting: TextView
     private lateinit var headerAbout: TextView
 
     // Settings rows
@@ -66,8 +66,11 @@ class SettingsFragment : Fragment() {
     private lateinit var rowAdvertiseInBackground: View
     private lateinit var rowStartOnBoot: View
     private lateinit var rowDebugOverlay: View
-    private lateinit var rowForceHighRes: View
     private lateinit var rowForceLowRes: View
+    private lateinit var rowSmoothPlayback: View
+    private lateinit var rowLightStream: View
+    private lateinit var rowWeakSignalBadge: View
+    private lateinit var rowWifiCheck: View
     private lateinit var rowDiagnostics: View
     private lateinit var textVersionValue: TextView
     private lateinit var rowReset: LinearLayout
@@ -90,12 +93,12 @@ class SettingsFragment : Fragment() {
         // Each header is an <include> of settings_section_header.xml (a bare
         // TextView). The include's android:id IS the TextView's id, so look it up
         // directly — no nested lookup.
-        headerDisplay   = view.findViewById(R.id.header_display)
-        headerProtocols = view.findViewById(R.id.header_protocols)
-        headerAirPlay   = view.findViewById(R.id.header_airplay)
-        headerService   = view.findViewById(R.id.header_service)
-        headerDeveloper = view.findViewById(R.id.header_developer)
-        headerAbout     = view.findViewById(R.id.header_about)
+        headerGeneral         = view.findViewById(R.id.header_general)
+        headerPictureSound    = view.findViewById(R.id.header_picture_sound)
+        headerWeakWifi        = view.findViewById(R.id.header_weak_wifi)
+        headerConnections     = view.findViewById(R.id.header_connections)
+        headerTroubleshooting = view.findViewById(R.id.header_troubleshooting)
+        headerAbout           = view.findViewById(R.id.header_about)
 
         rowDisplayName      = view.findViewById(R.id.row_display_name)
         textDisplayNameValue = view.findViewById(R.id.text_display_name_value)
@@ -111,8 +114,11 @@ class SettingsFragment : Fragment() {
         rowAdvertiseInBackground = view.findViewById(R.id.row_advertise_in_background)
         rowStartOnBoot      = view.findViewById(R.id.row_start_on_boot)
         rowDebugOverlay     = view.findViewById(R.id.row_debug_overlay)
-        rowForceHighRes     = view.findViewById(R.id.row_force_high_res)
         rowForceLowRes      = view.findViewById(R.id.row_force_low_res)
+        rowSmoothPlayback   = view.findViewById(R.id.row_smooth_playback)
+        rowLightStream      = view.findViewById(R.id.row_light_stream)
+        rowWeakSignalBadge  = view.findViewById(R.id.row_weak_signal_badge)
+        rowWifiCheck        = view.findViewById(R.id.row_wifi_check)
         rowDiagnostics      = view.findViewById(R.id.row_diagnostics)
         textVersionValue    = view.findViewById(R.id.text_version_value)
         rowReset            = view.findViewById(R.id.row_reset)
@@ -120,11 +126,11 @@ class SettingsFragment : Fragment() {
 
     /** Sets all section header titles from string resources. */
     private fun setSectionTitles() {
-        headerDisplay.setText(R.string.settings_section_display)
-        headerProtocols.setText(R.string.settings_section_protocols)
-        headerAirPlay.setText(R.string.settings_section_airplay)
-        headerService.setText(R.string.settings_section_service)
-        headerDeveloper.setText(R.string.settings_section_developer)
+        headerGeneral.setText(R.string.settings_section_general)
+        headerPictureSound.setText(R.string.settings_section_picture_sound)
+        headerWeakWifi.setText(R.string.settings_section_weak_wifi)
+        headerConnections.setText(R.string.settings_section_connections)
+        headerTroubleshooting.setText(R.string.settings_section_troubleshooting)
         headerAbout.setText(R.string.settings_section_about)
     }
 
@@ -155,12 +161,17 @@ class SettingsFragment : Fragment() {
         configureToggleRow(rowStartOnBoot,  R.string.setting_start_on_boot,
             R.string.setting_start_on_boot_subtitle)
         configureToggleRow(rowDebugOverlay, R.string.setting_debug_overlay,      R.string.setting_debug_overlay_subtitle)
-        configureToggleRow(rowForceHighRes, R.string.setting_force_high_res,      R.string.setting_force_high_res_subtitle)
         configureToggleRow(rowForceLowRes,  R.string.setting_force_low_res,       R.string.setting_force_low_res_subtitle)
+        configureToggleRow(rowSmoothPlayback, R.string.setting_smooth_playback,   R.string.setting_smooth_playback_subtitle)
+        configureToggleRow(rowLightStream,  R.string.setting_light_stream,        R.string.setting_light_stream_subtitle)
+        configureToggleRow(rowWeakSignalBadge,
+            R.string.setting_weak_signal_badge, R.string.setting_weak_signal_badge_subtitle)
+        configureToggleRow(rowWifiCheck,    R.string.setting_wifi_check,          R.string.setting_wifi_check_subtitle)
         configureToggleRow(rowDiagnostics,  R.string.setting_diagnostics,         R.string.setting_diagnostics_subtitle)
-        // Not a toggle: hide the [ ON ]/[ OFF ] readout the shared row layout provides, so it does
-        // not sit there implying this row has a state to be in.
+        // Not toggles: hide the [ ON ]/[ OFF ] readout the shared row layout provides, so it does
+        // not sit there implying these rows have a state to be in.
         rowDiagnostics.findViewById<TextView>(R.id.text_setting_value)?.visibility = View.GONE
+        rowWifiCheck.findViewById<TextView>(R.id.text_setting_value)?.visibility = View.GONE
 
         textVersionValue.text = BuildConfig.VERSION_NAME
     }
@@ -212,8 +223,10 @@ class SettingsFragment : Fragment() {
         setToggle(rowAdvertiseInBackground, settings.advertiseInBackground)
         setToggle(rowStartOnBoot,  settings.startOnBoot)
         setToggle(rowDebugOverlay, settings.showDebugOverlay)
-        setToggle(rowForceHighRes, settings.forceHighResolution)
         setToggle(rowForceLowRes,  settings.forceLowResolution)
+        setToggle(rowSmoothPlayback, settings.smoothPlayback)
+        setToggle(rowLightStream,  settings.lightStream)
+        setToggle(rowWeakSignalBadge, settings.weakSignalBadge)
         textAudioBoostValue.text = boostLabel(settings.audioBoostDb)
     }
 
@@ -281,24 +294,19 @@ class SettingsFragment : Fragment() {
             StreamStats.overlayEnabled = enabled
             save { it.copy(showDebugOverlay = enabled) }
         }
-        // Both resolution toggles restart the receiver, and each clears the other.
-        //
-        // Restart because the advertised size is not read per request: it is handed to RtspHandler
-        // when AirPlayReceiver is constructed and baked into the /info `displays` record from there,
-        // so a live receiver goes on offering the old size however many times the toggle is flipped.
-        //
-        // Mutually exclusive because "1440p and 720p" is not a thing to ask a sender for, and the
-        // pair is only two switches rather than one three-way control to match every other row on
-        // this screen. AppSettings.mirrorHeight still resolves the conflict defensively, for a
-        // stored value this UI did not write.
-        setToggleListener(rowForceHighRes) { enabled ->
-            if (enabled) setToggle(rowForceLowRes, false)
-            saveAndRestart { it.copy(forceHighResolution = enabled, forceLowResolution = it.forceLowResolution && !enabled) }
+        // The Weak Wi-Fi switches that change what is offered to the sender, or how the stream is
+        // buffered, are read when the receiver is built (the /info record, MirrorStreamServer and
+        // AudioStreamServer), so they restart it — a live receiver would otherwise go on with the
+        // old behaviour however many times the switch was flipped.
+        setToggleListener(rowForceLowRes) { enabled -> saveAndRestart { it.copy(forceLowResolution = enabled) } }
+        setToggleListener(rowSmoothPlayback) { enabled -> saveAndRestart { it.copy(smoothPlayback = enabled) } }
+        setToggleListener(rowLightStream) { enabled -> saveAndRestart { it.copy(lightStream = enabled) } }
+        setToggleListener(rowWeakSignalBadge) { enabled ->
+            // Live, like smart fill: StreamingScreen reads the flag on its tick.
+            StreamStats.weakSignalBadgeEnabled = enabled
+            save { it.copy(weakSignalBadge = enabled) }
         }
-        setToggleListener(rowForceLowRes) { enabled ->
-            if (enabled) setToggle(rowForceHighRes, false)
-            saveAndRestart { it.copy(forceLowResolution = enabled, forceHighResolution = it.forceHighResolution && !enabled) }
-        }
+        rowWifiCheck.setOnClickListener { showWifiCheck() }
         setToggleListener(rowSmartFill)    { enabled ->
             // Push straight to StreamStats as well as persisting: StreamingScreen reads the flag on
             // its layout tick, so the picture re-fits within ~200 ms instead of at the next session.
@@ -437,6 +445,15 @@ class SettingsFragment : Fragment() {
             .show()
     }
 
+    /** Settings → Weak Wi-Fi → Check my Wi-Fi: band, signal and link speed, with plain advice. */
+    private fun showWifiCheck() {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.wifi_check_title)
+            .setMessage(WifiCheck.message(requireContext()))
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
     /**
      * Resets all settings to defaults and repopulates the UI.
      * TODO: Add a confirmation dialog before resetting.
@@ -450,6 +467,7 @@ class SettingsFragment : Fragment() {
             // while the UI claimed otherwise.
             StreamStats.audioBoostDb = defaults.audioBoostDb
             StreamStats.smartFillEnabled = defaults.smartFillEnabled
+            StreamStats.weakSignalBadgeEnabled = defaults.weakSignalBadge
             populateUI(defaults)
             Logger.i("Settings reset to defaults")
         }

@@ -22,8 +22,10 @@ object InfoResponder {
         width: Int = 1920,
         height: Int = 1080,
         pinRequired: Boolean = false,
-        forceScreenMirroring: Boolean = false
+        forceScreenMirroring: Boolean = false,
+        maxFps: Int = 60,
     ): ByteArray {
+        val fps = maxFps.coerceIn(MIN_FPS, MAX_FPS)
         val mac = NetworkUtils.getMacAddress()
         // When PIN access control is on, set the "pairing/PIN required" status bit so the sender runs
         // the SRP pair-setup flow. NOTE: exact flag semantics are sender-version-dependent — verify
@@ -66,7 +68,12 @@ object InfoResponder {
                     "widthPixels" to width.toLong(),
                     "heightPixels" to height.toLong(),
                     "rotation" to false,
-                    "refreshRate" to (1.0 / 60.0),
+                    // The frame rate the sender may use. 30 is Weak Wi-Fi → Light stream: half the
+                    // frames for the Wi-Fi to carry, and on a mirrored screen at couch distance most
+                    // people cannot tell. UxPlay offers the same pair of keys for the same purpose
+                    // (its -fps option), and senders honour them.
+                    "refreshRate" to (1.0 / fps),
+                    "maxFPS" to fps.toLong(),
                     "overscanned" to false,   // false = macOS uses the full advertised resolution
                     "features" to 14L
                 )
@@ -82,5 +89,7 @@ object InfoResponder {
     private const val STATUS_FLAG_PIN_REQUIRED = 0x8L
 
     private const val MODEL = "AppleTV5,3"
+    private const val MIN_FPS = 24
+    private const val MAX_FPS = 60
     private const val SOURCE_VERSION = "220.68"
 }

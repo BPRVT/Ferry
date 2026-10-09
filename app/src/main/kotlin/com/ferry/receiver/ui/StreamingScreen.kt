@@ -12,6 +12,7 @@ import android.view.SurfaceView
 import android.view.Surface
 import android.widget.FrameLayout
 import android.widget.TextView
+import com.ferry.receiver.R
 import com.ferry.receiver.airplay.StreamStats
 import com.ferry.receiver.util.Logger
 import com.ferry.receiver.util.VideoFit
@@ -60,6 +61,21 @@ class StreamingScreen @JvmOverloads constructor(
         setPadding(24, 16, 24, 16)
         visibility = GONE
     }
+    /**
+     * "Weak Wi-Fi" note, bottom-right, while the link is visibly struggling (Settings → Weak Wi-Fi →
+     * Weak Wi-Fi notice). A stutter with an explanation on screen reads as the network; the same
+     * stutter without one reads as Ferry being broken. Driven by lateness, never by silence, so a
+     * paused video cannot raise it — see [StreamStats.lastStruggleMs].
+     */
+    private val weakSignalBadge = TextView(context).apply {
+        setText(R.string.weak_wifi_badge)
+        setTextColor(Color.WHITE)
+        setBackgroundColor(Color.parseColor("#99000000"))
+        textSize = 14f
+        setPadding(20, 10, 20, 10)
+        visibility = GONE
+    }
+
     // Last applied surface size, so we only re-layout on an actual change (rotation/resolution switch).
     private var lastSurfaceW = Int.MIN_VALUE
     private var lastSurfaceH = Int.MIN_VALUE
@@ -74,6 +90,9 @@ class StreamingScreen @JvmOverloads constructor(
             } else if (debugView.visibility != GONE) {
                 debugView.visibility = GONE
             }
+            val showBadge = StreamStats.weakSignalBadgeEnabled && StreamStats.isStruggling()
+            val badgeVisibility = if (showBadge) VISIBLE else GONE
+            if (weakSignalBadge.visibility != badgeVisibility) weakSignalBadge.visibility = badgeVisibility
             handler.postDelayed(this, REFRESH_MS)
         }
     }
@@ -106,6 +125,10 @@ class StreamingScreen @JvmOverloads constructor(
             LayoutParams.WRAP_CONTENT,
             LayoutParams.WRAP_CONTENT
         ).apply { gravity = Gravity.TOP or Gravity.START; topMargin = safeY; leftMargin = safeX })
+        addView(weakSignalBadge, LayoutParams(
+            LayoutParams.WRAP_CONTENT,
+            LayoutParams.WRAP_CONTENT
+        ).apply { gravity = Gravity.BOTTOM or Gravity.END; bottomMargin = safeY; rightMargin = safeX })
 
         // Register a callback to track when the Surface is created/destroyed
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {

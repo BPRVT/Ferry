@@ -180,6 +180,42 @@ object StreamStats {
      */
     @Volatile var audioCatchUp = false
 
+    // ─── Weak Wi-Fi (playout buffers) ────────────────────────────────────────
+
+    /** Delay the video playout buffer is currently adding, 0 when smooth playback is off. */
+    @Volatile var videoPlayoutDelayMs = 0
+
+    /** Depth, in milliseconds, the audio buffer is currently holding to, 0 when it is not buffering. */
+    @Volatile var audioPlayoutDelayMs = 0
+
+    /**
+     * When something last arrived badly late (`System.currentTimeMillis()`, 0 = never) — the
+     * signal behind the "Weak Wi-Fi" badge.
+     *
+     * Lateness, not silence, and that distinction is the lesson of 8.0.0. A paused video sends
+     * nothing, which looks exactly like a dead link if you watch for gaps; lateness can only be
+     * measured on something that *did* arrive, so a pause can never trip it.
+     */
+    @Volatile var lastStruggleMs = 0L
+
+    /** Records how late an arrival was against the link's best case. Cheap; called per frame/packet. */
+    fun noteLateness(latenessMs: Long) {
+        if (latenessMs >= STRUGGLE_LATENESS_MS) lastStruggleMs = System.currentTimeMillis()
+    }
+
+    /** Whether the Wi-Fi has visibly struggled in the last few seconds. */
+    fun isStruggling(nowMs: Long = System.currentTimeMillis()): Boolean =
+        lastStruggleMs > 0L && nowMs - lastStruggleMs < STRUGGLE_SHOW_MS
+
+    /** Mirrored from the "Weak Wi-Fi badge" setting; [com.ferry.receiver.ui.StreamingScreen] reads it. */
+    @Volatile var weakSignalBadgeEnabled = true
+
+    /** Lateness that counts as the link struggling: well past jitter, into "you would see this". */
+    private const val STRUGGLE_LATENESS_MS = 250L
+
+    /** How long the badge stays up after the last sign of trouble, so it does not flicker. */
+    private const val STRUGGLE_SHOW_MS = 5_000L
+
     /** Clears per-stream counters (call when a mirror session ends). Keeps [overlayEnabled]. */
     fun resetStreams() {
         videoAdvertised = ""; videoFps = 0; videoQueue = 0; videoQueueCapacity = 0; videoDropPct = 0
@@ -188,6 +224,7 @@ object StreamStats {
         watchdogRecoveries = 0; watchdogLastReason = ""; watchdogLastMs = 0L
         videoWidth = 0; videoHeight = 0
         audioActive = false; audioQueue = 0; audioDupPct = 0; audioCatchUp = false
+        videoPlayoutDelayMs = 0; audioPlayoutDelayMs = 0; lastStruggleMs = 0L
         // displayRefreshHz is NOT reset — it is a property of the TV, not of the stream, and
         // StreamingScreen only republishes it when a Surface is created.
     }
@@ -266,7 +303,8 @@ object StreamStats {
      * Deliberately held to the same five lines it had before the state fields were added — the
      * overlay sits on top of live video on a TV, and the current size was reported as reading well.
      * Anything new therefore has to earn its place by displacing a tally, not by growing the box.
-     * The one exception is WATCH, which appears only once the watchdog has actually fired.
+     * The exceptions are WATCH, which appears only once the watchdog has actually fired, and BUF,
+     * which appears only while smooth playback is buffering.
      *
      * Reading it for a frozen picture:
      *  - `in` fresh, `last` stale  → frames arriving, dying inside Ferry — look at DEC
@@ -274,6 +312,13 @@ object StreamStats {
      *  - `DEC none` or `rebuild`   → there is no decoder to give frames to
      *  - `q 16/16`                 → nothing is draining the queue
      */
+    /** The BUF line, shown only while a playout buffer is actually in use. */
+    private fun buffers(now: Long): String {
+        if (videoPlayoutDelayMs <= 0 && audioPlayoutDelayMs <= 0) return ""
+        val wifi = if (isStruggling(now)) "  wifi struggling" else ""
+        return "\nBUF    video ${videoPlayoutDelayMs}ms  audio ${audioPlayoutDelayMs}ms$wifi"
+    }
+
     fun summary(): String {
         val now = System.currentTimeMillis()
         val queue = if (videoQueueCapacity > 0) "$videoQueue/$videoQueueCapacity" else "$videoQueue"
@@ -302,6 +347,7 @@ object StreamStats {
             "AUDIO  " + (if (audioActive) {
                 "on  q $audioQueue  dup ${audioDupPct}%" + (if (audioCatchUp) "  sync↓" else "")
             } else "off") +
+            buffers(now) +
             watch
     }
 }

@@ -247,7 +247,10 @@ class MainActivity : AppCompatActivity() {
         showingStoredCrashReport = crashReport != null
         val body: () -> String =
             if (crashReport != null) ({ crashReport }) else com.ferry.receiver.util.CrashReporter::liveReport
-        diagnosticServer = com.ferry.receiver.util.DiagnosticServer(body)
+        diagnosticServer = com.ferry.receiver.util.DiagnosticServer(
+            body,
+            files = mapOf("/trace.csv" to { com.ferry.receiver.airplay.playout.NetworkTrace.csv() }),
+        )
         diagnosticScreen.show(body(), diagnosticServer?.start(), live = crashReport == null)
         diagnosticScreen.visibility = View.VISIBLE
         streamingContainer.visibility = View.VISIBLE

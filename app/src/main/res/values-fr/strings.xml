@@ -33,9 +33,11 @@
     <string name="action_restart">Redémarrer</string>
 
     <!-- ── Settings section headers ────────────────────────────── -->
-    <string name="settings_section_display">Affichage</string>
-    <string name="settings_section_protocols">Protocoles</string>
-    <string name="settings_section_service">Service</string>
+    <string name="settings_section_general">Général</string>
+    <string name="settings_section_picture_sound">Image et son</string>
+    <string name="settings_section_weak_wifi">Wi-Fi faible</string>
+    <string name="settings_section_connections">Connexions</string>
+    <string name="settings_section_troubleshooting">Dépannage</string>
     <string name="settings_section_about">À propos</string>
 
     <!-- ── Settings row labels ─────────────────────────────────── -->

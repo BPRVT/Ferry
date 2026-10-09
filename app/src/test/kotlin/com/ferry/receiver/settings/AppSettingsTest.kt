@@ -156,29 +156,28 @@ class AppSettingsTest {
     }
 
     @Test
-    fun `high resolution advertises 1440p`() {
-        val s = AppSettings.DEFAULT.copy(forceHighResolution = true)
-        assertEquals(2560, s.mirrorWidth)
-        assertEquals(1440, s.mirrorHeight)
-    }
-
-    @Test
     fun `low resolution advertises 720p`() {
         val s = AppSettings.DEFAULT.copy(forceLowResolution = true)
         assertEquals(1280, s.mirrorWidth)
         assertEquals(720, s.mirrorHeight)
     }
 
+    // ─── Weak Wi-Fi ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `default offers 60 fps and light stream offers 30`() {
+        assertEquals(60, AppSettings.DEFAULT.maxFps)
+        assertEquals(30, AppSettings.DEFAULT.copy(lightStream = true).maxFps)
+    }
+
     /**
-     * The UI keeps these mutually exclusive, but a settings file from an older build or edited by
-     * hand can still hold both. "Asked for the lightest option" must win over "asked for the
-     * heaviest" — resolving it the other way would hand 1440p to someone whose reason for touching
-     * these settings at all was that 1080p was too much.
+     * Smooth playback adds delay, which on good Wi-Fi buys nothing, so it is opt-in. The badge only
+     * ever appears on a struggling link, so it is on.
      */
     @Test
-    fun `low resolution wins when both flags are somehow set`() {
-        val s = AppSettings.DEFAULT.copy(forceHighResolution = true, forceLowResolution = true)
-        assertEquals(1280, s.mirrorWidth)
-        assertEquals(720, s.mirrorHeight)
+    fun `weak Wi-Fi defaults`() {
+        assertFalse(AppSettings.DEFAULT.smoothPlayback)
+        assertFalse(AppSettings.DEFAULT.lightStream)
+        assertTrue(AppSettings.DEFAULT.weakSignalBadge)
     }
 }

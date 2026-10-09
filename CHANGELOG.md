@@ -11,6 +11,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.1.0] - 2026-10-09
+
+Weak Wi-Fi. Mirroring on a connection that drops — not great, but Wi-Fi — and a tidier Settings
+screen to go with it.
+
+### Added
+
+- **Smooth playback** (Settings → Weak Wi-Fi). Mirrored video rides TCP, so on bad Wi-Fi nothing is
+  lost, only late: a stall delivers nothing, then everything at once. Through 8.0.0 Ferry decoded
+  each frame the moment it arrived, so every stall was a frozen picture followed by a fast-forward,
+  and the burst overflowed the decode queue and destroyed frames the rest of the stream needed.
+
+  With this on, each frame carries the iPad's own capture time (header bytes 8–15, the same field
+  UxPlay reads) and is played on that clock, a little behind. The delay adapts: about 60 ms on a
+  clean link, growing to cover the worst lateness of the last 20 seconds (up to one second), and
+  shrinking slowly once the link calms. A stall shorter than the delay is never seen. Audio holds
+  the same cushion, refills before resuming after a gap, fades the edges of any gap it cannot hide,
+  and steers its depth by playing 2% fast or slow, so picture and sound stay together.
+  See `airplay/playout/PlayoutScheduler`.
+- **Light stream (30 fps).** Offers senders 30 frames a second in `/info` (`maxFPS` and
+  `refreshRate`, as UxPlay's `-fps` does) — roughly half the data over the Wi-Fi.
+- **Weak Wi-Fi notice.** A small note in the corner while the connection is visibly struggling,
+  so a stutter has an explanation on screen. Driven by how *late* things arrive, never by silence,
+  so a paused video cannot raise it — the lesson of 8.0.0.
+- **Check my Wi-Fi.** Band, signal and link speed for this TV, with plain advice: 5 GHz over 2.4,
+  move closer, an Ethernet adapter, or the switches above.
+- **Re-announce after a drop.** When the TV's network comes back, Ferry re-registers over mDNS so
+  it reappears in the AirPlay menu straight away instead of after the next periodic announcement.
+- **A bad-Wi-Fi simulator** (`PlayoutSimulatorTest`). Synthetic traces with jitter, stalls and
+  post-stall bursts, played through the buffer and scored for freezes, fast-forwards and delay.
+  Every frame's timing is also recorded on the TV and served by the diagnostics page at
+  `/trace.csv`, so a real bad session replays in a unit test.
+
+### Changed
+
+- **Video-URL playback uses ExoPlayer** (Media3) instead of Android's `MediaPlayer`, with a 30–60 s
+  read-ahead buffer and HLS support. When an app hands the TV a URL instead of mirroring, the TV
+  streams it directly and the iPad's Wi-Fi drops out of the picture entirely; that route now
+  actually holds enough buffer to ride out a drop.
+- **Settings reorganised** into General, Picture & sound, Weak Wi-Fi, Connections, Troubleshooting
+  and About.
+- The debug overlay gains a `BUF` line with the current video and audio buffer delays.
+
+### Removed
+
+- **Higher resolution (1440p).** It made the stream heavier on exactly the networks and sticks
+  that struggle. A stored `true` from an older build is cleared and ignored.
+
+---
+
 ## [8.0.0] - 2026-10-09
 
 Pause a video and Ferry ended the cast. Ferry no longer ends sessions on its own.

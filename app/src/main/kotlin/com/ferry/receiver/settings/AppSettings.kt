@@ -133,14 +133,6 @@ data class AppSettings(
 
     // ─── Video ─────────────────────────────────────────────────────────────
     /**
-     * When true, advertise a higher mirroring resolution (1440p) in the AirPlay `/info`
-     * `displays` record so macOS renders/encodes the mirror at 2560×1440 instead of 1920×1080.
-     * The TV surface is 1080p, so frames are downscaled (sharper text via supersampling) at
-     * the cost of more decode work — heavier on low-end SoCs.
-     */
-    val forceHighResolution: Boolean = false,
-
-    /**
      * When true, advertise **1280×720** instead of 1920×1080, so the sender encodes a quarter fewer
      * pixels than 1080p and less than a fifth of 1440p.
      *
@@ -153,13 +145,40 @@ data class AppSettings(
      *
      * Off by default. 1080p is the right default for a 1080p panel and looks better; this is for
      * when smooth matters more than sharp, which on a mirrored screen at couch distance is a trade
-     * most people take without noticing what they gave up.
+     * most people take without noticing what they gave up. Lives under Weak Wi-Fi in Settings,
+     * because that is the situation it helps most.
      *
-     * Takes precedence over [forceHighResolution] — see [mirrorHeight]. Both are exposed as plain
-     * toggles rather than one three-way control because that is what every other row on the screen
-     * is, and the UI keeps them mutually exclusive.
+     * (8.1.0 removed its opposite, a 1440p option. It made the stream heavier on exactly the
+     * networks and sticks that struggle, and a stored `true` from an older build is now ignored.)
      */
     val forceLowResolution: Boolean = false,
+
+    // ─── Weak Wi-Fi ────────────────────────────────────────────────────────
+    /**
+     * Buffer mirrored video and audio a little, and play them on the sender's own clock, so Wi-Fi
+     * stalls are absorbed instead of shown as a frozen picture followed by a fast-forward.
+     *
+     * The buffer adapts: about 60 ms on a clean link, growing up to a second when the link has
+     * recently stalled, and shrinking back once it calms. See
+     * [com.ferry.receiver.airplay.playout.PlayoutScheduler].
+     *
+     * Off by default because it trades a little delay for smoothness, and on good Wi-Fi there is
+     * nothing to smooth. Takes effect on the next cast.
+     */
+    val smoothPlayback: Boolean = false,
+
+    /**
+     * Offer senders 30 frames a second instead of 60, which roughly halves what the Wi-Fi has to
+     * carry. Mirroring a mostly still screen or a 24/30 fps video loses nothing visible; fast games
+     * and scrolling look less fluid. Takes effect on the next cast.
+     */
+    val lightStream: Boolean = false,
+
+    /**
+     * Show a small "Weak Wi-Fi" note in the corner while the connection is visibly struggling, so a
+     * stutter has an explanation on screen. On by default: it never appears on a healthy link.
+     */
+    val weakSignalBadge: Boolean = true,
 
     /**
      * When true, accept the mirroring audio stream (type 96, AAC-ELD).
@@ -206,26 +225,13 @@ data class AppSettings(
     val audioBoostDb: Int = 0
 ) {
 
-    /**
-     * Advertised mirroring display size: 1280×720, 1920×1080 (default) or 2560×1440.
-     *
-     * [forceLowResolution] wins if both it and [forceHighResolution] are somehow set. The UI clears
-     * one when the other is turned on, so that should not arise — but a settings file written by an
-     * older build, or edited by hand, can still produce it, and the safe reading of "the user asked
-     * for less work" is to give them less work. Resolving it the other way would silently hand the
-     * heaviest setting to someone who explicitly asked for the lightest.
-     */
-    val mirrorWidth: Int get() = when {
-        forceLowResolution -> 1280
-        forceHighResolution -> 2560
-        else -> 1920
-    }
+    /** Advertised mirroring display size: 1280×720 with [forceLowResolution], else 1920×1080. */
+    val mirrorWidth: Int get() = if (forceLowResolution) 1280 else 1920
 
-    val mirrorHeight: Int get() = when {
-        forceLowResolution -> 720
-        forceHighResolution -> 1440
-        else -> 1080
-    }
+    val mirrorHeight: Int get() = if (forceLowResolution) 720 else 1080
+
+    /** Highest frame rate offered to senders: 30 with [lightStream], else 60. */
+    val maxFps: Int get() = if (lightStream) 30 else 60
 
     /**
      * Returns the validated, trimmed display name.

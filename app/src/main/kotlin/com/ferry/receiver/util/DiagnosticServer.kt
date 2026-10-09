@@ -28,12 +28,20 @@ import java.util.concurrent.Executors
  * ── Scope, because it is a listening socket ──
  *
  * Runs **only while the user is looking at the diagnostics screen**, and stops itself after
- * [MAX_LIFETIME_MS] regardless. It is read-only, serves exactly one document, and is bound to an
+ * [MAX_LIFETIME_MS] regardless. It is read-only, serves the report plus a fixed list of [files]
+ * (the Wi-Fi timing trace), and is bound to an
  * OS-assigned port rather than a predictable one. The report contains stack traces, log lines and
  * the pipeline counters — no credentials and no pairing keys, which stay in app-private storage and
  * are never part of a report.
  */
-class DiagnosticServer(private val body: () -> String) {
+class DiagnosticServer(
+    private val body: () -> String,
+    /**
+     * Extra plain-text documents by path, e.g. `/trace.csv` — the network timing trace the bad-Wi-Fi
+     * simulator replays (see `airplay.playout.NetworkTrace`). Read-only like the rest.
+     */
+    private val files: Map<String, () -> String> = emptyMap(),
+) {
 
     private var serverSocket: ServerSocket? = null
     private val threads = Executors.newSingleThreadExecutor { r ->
@@ -93,9 +101,8 @@ class DiagnosticServer(private val body: () -> String) {
      * Answers one request with the report as `text/plain`.
      *
      * Plain text on purpose: it is what someone wants to select, copy and paste into a message, and
-     * a browser renders it without turning a stack trace into a wall of collapsed whitespace. The
-     * request line is read and discarded — every path returns the same document, because there is
-     * only one thing here to serve and pretending otherwise would just be surface to get wrong.
+     * a browser renders it without turning a stack trace into a wall of collapsed whitespace. Paths
+     * in [files] serve their own document as plain text; every other path returns the report.
      */
     private fun serve(client: Socket) {
         val reader = BufferedReader(InputStreamReader(client.getInputStream()))
@@ -107,9 +114,10 @@ class DiagnosticServer(private val body: () -> String) {
             if (line.isEmpty()) break
         }
         val path = requestLine.split(' ').getOrNull(1).orEmpty()
-        val raw = path.startsWith("/raw")
+        val file = files[path.substringBefore('?')]
+        val raw = file != null || path.startsWith("/raw")
 
-        val payload = runCatching { body() }.getOrElse { "diagnostics unavailable: ${it.message}" }
+        val payload = runCatching { (file ?: body)() }.getOrElse { "diagnostics unavailable: ${it.message}" }
         val bytes = if (raw) payload.toByteArray(Charsets.UTF_8)
                     else page(payload).toByteArray(Charsets.UTF_8)
         val type = if (raw) "text/plain" else "text/html"
@@ -154,10 +162,11 @@ class DiagnosticServer(private val body: () -> String) {
  button{font:600 15px/1 system-ui,sans-serif;padding:12px 18px;border:0;border-radius:8px;
         background:#2e7d32;color:#fff}
  button:active{background:#1b5e20}
- a{color:#8ab4f8;font:13px system-ui,sans-serif;margin-left:auto}
+ a{color:#8ab4f8;font:13px system-ui,sans-serif}
+ a:first-of-type{margin-left:auto}
  pre{white-space:pre-wrap;word-break:break-word;padding:12px;margin:0}
 </style></head><body>
-<header><button id="c">Copy all</button><span id="s"></span><a href="/raw">raw</a></header>
+<header><button id="c">Copy all</button><span id="s"></span><a href="/trace.csv">wi-fi trace</a><a href="/raw">raw</a></header>
 <pre id="r">$escaped</pre>
 <script>
  var b=document.getElementById('c'),s=document.getElementById('s'),r=document.getElementById('r');

@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -64,6 +65,10 @@ class AirPlayReceiver(
      * (AppSettings.forceScreenMirroring). See [AirPlayFeatures.MIRROR_ONLY].
      */
     private val forceScreenMirroring: Boolean = false,
+    /** Weak Wi-Fi → Smooth playback: buffer video and audio on the sender's clock. See MirrorStreamServer. */
+    private val smoothPlayback: Boolean = false,
+    /** Frame rate offered to senders in `/info`: 60 normally, 30 with Weak Wi-Fi → Light stream. */
+    private val maxFps: Int = 60,
     /** Lazy Surface provider — called only for video streams when RECORD arrives. */
     private val videoSurfaceProvider: () -> Surface?,
     private val onStateChanged: (ProtocolState) -> Unit,
@@ -158,6 +163,7 @@ class AirPlayReceiver(
                 startTimingHandler()
                 startMdnsService()
                 startRtspHandler()
+                watchNetwork()
             } catch (e: Exception) {
                 Logger.e("Failed to start AirPlayReceiver", e)
                 emitState(ProtocolState.ERROR)
@@ -176,6 +182,7 @@ class AirPlayReceiver(
     fun stop() {
         Logger.i("AirPlayReceiver stopping")
         try {
+            unwatchNetwork()
             rtspHandler?.stop()
             timingHandler?.stop()
             // release(), not stop(): this receiver is being discarded, so MdnsService's retry
@@ -199,6 +206,57 @@ class AirPlayReceiver(
 
     /** True once a sender has advertised DACP reverse-control (so the TV remote can drive playback). */
     fun isRemoteControlAvailable(): Boolean = dacpClient.isAvailable
+
+    // ─── Private: network changes ────────────────────────────────────────────
+
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+
+    /** When the default network was lost (elapsedRealtime), or 0 while connected. */
+    @Volatile private var networkLostAtMs = 0L
+
+    /**
+     * Re-announces Ferry over mDNS when the TV's network comes back after dropping.
+     *
+     * On a Wi-Fi that drops, the TV's own connection goes too. When it returns, senders can go on
+     * holding a stale view of Ferry — the old address, or nothing at all — until the next periodic
+     * mDNS announcement, which is why it can take a while to reappear in the AirPlay menu. Announcing
+     * again as soon as the network is back makes it reappear right away.
+     *
+     * Only on a genuine return: the callback also reports the network that is already up when it is
+     * registered, which is not a reconnection. A short delay lets the interface finish coming up, and
+     * a failed re-registration is retried by [MdnsService] itself.
+     */
+    private fun watchNetwork() {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return
+        val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onLost(network: android.net.Network) {
+                networkLostAtMs = android.os.SystemClock.elapsedRealtime()
+                Logger.w("Network lost — will re-announce when it returns")
+            }
+
+            override fun onAvailable(network: android.net.Network) {
+                val lostAt = networkLostAtMs
+                if (lostAt == 0L) return
+                networkLostAtMs = 0L
+                val downMs = android.os.SystemClock.elapsedRealtime() - lostAt
+                scope.launch {
+                    delay(REANNOUNCE_DELAY_MS)
+                    Logger.i("Network back after ${downMs}ms — re-announcing over mDNS")
+                    mdnsService?.restart(displayName.ifBlank { null })
+                }
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(callback) }
+            .onSuccess { networkCallback = callback }
+            .onFailure { Logger.w("Could not watch network changes — ${it.message}") }
+    }
+
+    private fun unwatchNetwork() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return
+        runCatching { cm.unregisterNetworkCallback(callback) }
+    }
 
     // ─── Private: startup ────────────────────────────────────────────────────
 
@@ -258,7 +316,8 @@ class AirPlayReceiver(
             pinAuthEnabled = pinAuthEnabled,
             pairingStore = pairingStore,
             onShowPin = { pin -> onPinChanged(pin) },
-            forceScreenMirroring = forceScreenMirroring
+            forceScreenMirroring = forceScreenMirroring,
+            maxFps = maxFps,
         ).also { it.start(scope) }
         // The advertised size belongs in this line. It is a *setting* the user can change and a
         // *request* the sender may decline, and until a cast starts there was no way to confirm
@@ -500,6 +559,7 @@ class AirPlayReceiver(
         }
         return MirrorStreamServer(
             aesKey, ecdhSecret, streamConnectionId, videoSurfaceProvider, mirrorWidth, mirrorHeight,
+            smoothPlayback = smoothPlayback,
         )
             .also { mirrorServer = it; it.start(scope); videoPlaying = true; emitNowPlaying() }
             .dataPort
@@ -519,7 +579,10 @@ class AirPlayReceiver(
             Logger.w("Mirror audio re-SETUP on a live session — stopping the previous server first")
             it.stop()
         }
-        val server = AudioStreamServer(aesKey, ecdhSecret, aesIv, sampleRate, channels, codecType, framesPerPacket)
+        val server = AudioStreamServer(
+            aesKey, ecdhSecret, aesIv, sampleRate, channels, codecType, framesPerPacket,
+            smoothPlayback = smoothPlayback,
+        )
             .also { audioServer = it; it.start(scope) }
         audioPlaying = true
         emitNowPlaying()
@@ -548,12 +611,13 @@ class AirPlayReceiver(
 
     /**
      * AirPlay video URL mode (non-mirroring): show the streaming surface and hand the URL to
-     * [AirPlayVideoPlayer], which fetches + plays it via MediaPlayer onto the same Surface.
+     * [AirPlayVideoPlayer], which fetches + plays it via ExoPlayer onto the same Surface.
      */
     private fun startUrlVideo(url: String, startFraction: Double) {
         onSenderNameChanged("AirPlay")
         emitState(ProtocolState.CONNECTED)   // shows StreamingScreen → Surface becomes available
         val player = urlVideoPlayer ?: AirPlayVideoPlayer(
+            context = context,
             surfaceProvider = videoSurfaceProvider,
             onEnded = { stopUrlVideo() }
         ).also { urlVideoPlayer = it }
@@ -702,6 +766,9 @@ class AirPlayReceiver(
     }
 
     companion object {
+        /** Wait after the network returns before re-announcing, so the interface is fully up. */
+        private const val REANNOUNCE_DELAY_MS = 2_000L
+
         // Hint dimensions for MediaCodec configuration.
         // Real resolution is encoded in the H.264 SPS NAL unit.
         private const val DEFAULT_VIDEO_WIDTH  = 1920

@@ -54,11 +54,11 @@
     <string name="notification_status_stopped">Empfänger gestoppt</string>
 
     <!-- ── Settings section headers ────────────────────────────── -->
-    <string name="settings_section_display">Anzeige</string>
-    <string name="settings_section_protocols">Protokolle</string>
-    <string name="settings_section_airplay">AirPlay</string>
-    <string name="settings_section_service">Dienst</string>
-    <string name="settings_section_developer">Entwickler</string>
+    <string name="settings_section_general">Allgemein</string>
+    <string name="settings_section_picture_sound">Bild &amp; Ton</string>
+    <string name="settings_section_weak_wifi">Schwaches WLAN</string>
+    <string name="settings_section_connections">Verbindungen</string>
+    <string name="settings_section_troubleshooting">Fehlerbehebung</string>
     <string name="settings_section_about">Über</string>
 
     <!-- ── Settings row labels ─────────────────────────────────── -->

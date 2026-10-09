@@ -28,8 +28,8 @@ android {
         // applicationId is overridden per flavor below
         minSdk = 25           // Lowest common denominator (Fire TV)
         targetSdk = 35
-        versionCode = 35
-        versionName = "8.0.0"
+        versionCode = 36
+        versionName = "8.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "CAST_APP_ID", "\"${castAppId.escapedForBuildConfig()}\"")
@@ -254,6 +254,11 @@ dependencies {
 
     // Binary property lists — AirPlay 2 handshake payloads (GET /info, SETUP)
     implementation(libs.ddplist)
+
+    // Media3 ExoPlayer: AirPlay video-URL playback (AirPlayVideoPlayer). Buffers far ahead and
+    // speaks HLS, which is what makes the URL route ride out a weak Wi-Fi.
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
 
     // Google TV Cast Connect receiver SDK. Kept out of the Fire TV flavor because
     // Fire TV lacks Google Play Services and cannot run Google Cast receiver APIs.

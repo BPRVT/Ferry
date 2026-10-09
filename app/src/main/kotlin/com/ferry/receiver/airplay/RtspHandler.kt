@@ -79,7 +79,9 @@ open class RtspHandler(
      * Advertise mirroring only, withholding the AirPlay video-URL capability
      * (AppSettings.forceScreenMirroring). See [AirPlayFeatures.MIRROR_ONLY].
      */
-    private val forceScreenMirroring: Boolean = false
+    private val forceScreenMirroring: Boolean = false,
+    /** Highest frame rate to offer senders in `/info` (AppSettings.lightStream → 30). */
+    private val maxFps: Int = 60,
 ) {
 
     // ─── Legacy AirPlay SRP PIN pairing (only used when pinAuthEnabled) ───────
@@ -487,7 +489,8 @@ open class RtspHandler(
         bodyBytes = InfoResponder.build(
             context, displayWidth, displayHeight,
             pinRequired = pinAuthEnabled,
-            forceScreenMirroring = forceScreenMirroring
+            forceScreenMirroring = forceScreenMirroring,
+            maxFps = maxFps,
         ),
         contentType = "application/x-apple-binary-plist",
         protocol = request.responseProtocol()

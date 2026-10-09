@@ -56,7 +56,10 @@ sourceSets {
                 // VideoDecoder is shadowed by src/stubs/VideoDecoder.kt which has no
                 // MediaCodec/Surface dependencies but exposes the companion-object
                 // members (parseSpsResolution, SpsBitReader) needed by VideoDecoderSpsTest.
-                "**/airplay/VideoDecoder.kt"
+                "**/airplay/VideoDecoder.kt",
+                // AirPlayVideoPlayer is built on Media3 ExoPlayer, which is published only to
+                // Google's Maven repository; shadowed by src/stubs/AirPlayVideoPlayer.kt.
+                "**/airplay/AirPlayVideoPlayer.kt"
             )
         }
     }

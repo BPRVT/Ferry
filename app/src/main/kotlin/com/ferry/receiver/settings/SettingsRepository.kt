@@ -118,10 +118,12 @@ class SettingsRepository(private val context: Context) {
         advertiseInBackground = this[Keys.ADVERTISE_IN_BACKGROUND] ?: false,
         startOnBoot        = this[Keys.START_ON_BOOT]           ?: false,
         showDebugOverlay   = this[Keys.SHOW_DEBUG_OVERLAY]      ?: false,
-        forceHighResolution = this[Keys.FORCE_HIGH_RESOLUTION]  ?: false,
         forceLowResolution = this[Keys.FORCE_LOW_RESOLUTION]    ?: false,
         mirrorAudioEnabled = this[Keys.MIRROR_AUDIO_ENABLED]    ?: true,
         smartFillEnabled   = this[Keys.SMART_FILL]              ?: true,
+        smoothPlayback     = this[Keys.SMOOTH_PLAYBACK]         ?: false,
+        lightStream        = this[Keys.LIGHT_STREAM]            ?: false,
+        weakSignalBadge    = this[Keys.WEAK_SIGNAL_BADGE]       ?: true,
         audioBoostDb       = com.ferry.receiver.util.AudioGain.clampBoostDb(this[Keys.AUDIO_BOOST_DB] ?: 0)
     )
 
@@ -139,10 +141,15 @@ class SettingsRepository(private val context: Context) {
         this[Keys.ADVERTISE_IN_BACKGROUND] = settings.advertiseInBackground
         this[Keys.START_ON_BOOT]        = settings.startOnBoot
         this[Keys.SHOW_DEBUG_OVERLAY]   = settings.showDebugOverlay
-        this[Keys.FORCE_HIGH_RESOLUTION] = settings.forceHighResolution
+        // Removed in 8.1.0. Cleared rather than left behind, so a stale `true` cannot surprise
+        // anyone if the option is ever reintroduced.
+        this.remove(Keys.FORCE_HIGH_RESOLUTION)
         this[Keys.FORCE_LOW_RESOLUTION]  = settings.forceLowResolution
         this[Keys.MIRROR_AUDIO_ENABLED] = settings.mirrorAudioEnabled
         this[Keys.SMART_FILL]           = settings.smartFillEnabled
+        this[Keys.SMOOTH_PLAYBACK]      = settings.smoothPlayback
+        this[Keys.LIGHT_STREAM]         = settings.lightStream
+        this[Keys.WEAK_SIGNAL_BADGE]    = settings.weakSignalBadge
         this[Keys.AUDIO_BOOST_DB]       = settings.audioBoostDb
     }
 
@@ -163,7 +170,11 @@ class SettingsRepository(private val context: Context) {
         val ADVERTISE_IN_BACKGROUND = booleanPreferencesKey("advertise_in_background")
         val START_ON_BOOT       = booleanPreferencesKey("start_on_boot")
         val SHOW_DEBUG_OVERLAY  = booleanPreferencesKey("show_debug_overlay")
+        /** Removed in 8.1.0; kept only so [fromAppSettings] can clear it. */
         val FORCE_HIGH_RESOLUTION = booleanPreferencesKey("force_high_resolution")
+        val SMOOTH_PLAYBACK     = booleanPreferencesKey("smooth_playback")
+        val LIGHT_STREAM        = booleanPreferencesKey("light_stream")
+        val WEAK_SIGNAL_BADGE   = booleanPreferencesKey("weak_signal_badge")
         val FORCE_LOW_RESOLUTION  = booleanPreferencesKey("force_low_resolution")
         val MIRROR_AUDIO_ENABLED = booleanPreferencesKey("mirror_audio_enabled")
         val AUDIO_BOOST_DB      = intPreferencesKey("audio_boost_db")

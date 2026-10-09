@@ -74,11 +74,11 @@
     <string name="notification_status_streaming">Streaming from %1$s</string>
 
     <!-- ── Settings section headers ────────────────────────────── -->
-    <string name="settings_section_display">Display</string>
-    <string name="settings_section_protocols">Protocols</string>
-    <string name="settings_section_airplay">AirPlay</string>
-    <string name="settings_section_service">Service</string>
-    <string name="settings_section_developer">Developer</string>
+    <string name="settings_section_general">General</string>
+    <string name="settings_section_picture_sound">Picture &amp; sound</string>
+    <string name="settings_section_weak_wifi">Weak Wi-Fi</string>
+    <string name="settings_section_connections">Connections</string>
+    <string name="settings_section_troubleshooting">Troubleshooting</string>
     <string name="settings_section_about">About</string>
 
     <!-- ── Settings row labels ─────────────────────────────────── -->
@@ -104,10 +104,39 @@
     <string name="setting_start_on_boot_subtitle">Start receiving after the TV restarts. Implies \"Keep receiving when closed\"</string>
     <string name="setting_debug_overlay">Debug overlay</string>
     <string name="setting_debug_overlay_subtitle">Show live FPS, queue and drop stats while streaming</string>
-    <string name="setting_force_high_res">Higher resolution (1440p)</string>
-    <string name="setting_force_high_res_subtitle">Sharper mirroring; uses more CPU. Off = 1080p</string>
-    <string name="setting_force_low_res">Smoother playback (720p)</string>
-    <string name="setting_force_low_res_subtitle">Asks the sender for fewer pixels — less to send, decode and draw. Try this if video stutters. Off = 1080p</string>
+    <string name="setting_force_low_res">Lower resolution (720p)</string>
+    <string name="setting_force_low_res_subtitle">Asks your device for fewer pixels, so there is less to send over Wi-Fi. Off = 1080p</string>
+    <string name="setting_smooth_playback">Smooth playback</string>
+    <string name="setting_smooth_playback_subtitle">Buffers a moment of picture and sound so Wi-Fi hiccups don\'t freeze the screen. Adds a little delay</string>
+    <string name="setting_light_stream">Light stream (30 fps)</string>
+    <string name="setting_light_stream_subtitle">Asks your device for half the frames, so there is less to send. Off = 60 fps</string>
+    <string name="setting_weak_signal_badge">Weak Wi-Fi notice</string>
+    <string name="setting_weak_signal_badge_subtitle">Shows a small note on screen while the connection is struggling</string>
+    <string name="setting_wifi_check">Check my Wi-Fi</string>
+    <string name="setting_wifi_check_subtitle">How strong this TV\'s connection is, and what would help</string>
+    <!-- Corner badge on the streaming screen while the link is visibly struggling. -->
+    <string name="weak_wifi_badge">Weak Wi-Fi</string>
+    <!-- Wi-Fi check dialog -->
+    <string name="wifi_check_title">Wi-Fi check</string>
+    <string name="wifi_check_ethernet">This TV is on a wired connection — the best there is. If mirroring still stutters, the weak side is your iPhone or iPad\'s Wi-Fi.</string>
+    <string name="wifi_check_offline">This TV doesn\'t seem to be on Wi-Fi right now.</string>
+    <!-- %3$s is a signal level such as "-62 dBm", %4$s a link rate such as "433 Mbps". -->
+    <string name="wifi_check_readout">Band: %1$s\nSignal: %2$s (%3$s)\nLink speed: %4$s</string>
+    <string name="wifi_band_24">2.4 GHz</string>
+    <string name="wifi_band_5">5 GHz</string>
+    <string name="wifi_band_6">6 GHz</string>
+    <string name="wifi_band_unknown">unknown</string>
+    <string name="wifi_signal_excellent">excellent</string>
+    <string name="wifi_signal_good">good</string>
+    <string name="wifi_signal_fair">fair</string>
+    <string name="wifi_signal_weak">weak</string>
+    <string name="wifi_signal_very_weak">very weak</string>
+    <string name="wifi_advice_24ghz">• You\'re on 2.4 GHz. It reaches further but is slower and more crowded. If your router has a 5 GHz network, connect the TV to that.</string>
+    <string name="wifi_advice_weak_signal">• The signal is weak. Moving the router and TV closer, or clearing what\'s between them, helps more than any setting.</string>
+    <string name="wifi_advice_slow_link">• The link speed is low for mirroring. Turn on Light stream and Lower resolution above.</string>
+    <string name="wifi_advice_ethernet">• The biggest fix of all: a cheap Ethernet adapter for this TV takes its half of the Wi-Fi out of the picture.</string>
+    <string name="wifi_advice_smooth">• Turn on Smooth playback above to ride out the drops that remain.</string>
+    <string name="wifi_advice_good">• This connection looks healthy. If mirroring still stutters, the weak side is probably your iPhone or iPad\'s Wi-Fi — try it closer to the router.</string>
     <string name="setting_force_screen_mirroring">Always mirror the screen</string>
     <string name="setting_force_screen_mirroring_subtitle">Stops apps opening their own player on the TV. Off = apps choose</string>
     <string name="setting_smart_fill">Smart fill</string>

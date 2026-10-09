@@ -2,12 +2,12 @@
 <!--
     fragment_settings.xml — Settings screen layout.
 
-    Organized into sections matching the AppSettings data model:
-    1. Display — device name shown in pickers
-    2. Protocols — enable/disable AirPlay, Miracast, Cast
-    3. AirPlay — PIN authentication
-    4. Service — start on boot
-    5. Developer — debug overlay
+    Grouped by what people come here to do (8.1.0):
+    1. General — device name, and whether Ferry keeps receiving when closed
+    2. Picture & sound — fill, audio, boost, mirror-only
+    3. Weak Wi-Fi — everything that helps on a poor connection, plus a Wi-Fi check
+    4. Connections — which receivers run, and the pairing PIN
+    5. Troubleshooting — diagnostics and the debug overlay
     6. About — version info, reset
 -->
 <ScrollView
@@ -40,9 +40,9 @@
             android:layout_marginBottom="8dp"
             android:background="@color/divider" />
 
-        <!-- ── Section: Display ────────────────────────────────── -->
+        <!-- ── Section: General ───────────────────────────────── -->
         <include layout="@layout/settings_section_header"
-            android:id="@+id/header_display" />
+            android:id="@+id/header_general" />
 
         <!-- Display name row -->
         <LinearLayout
@@ -88,59 +88,28 @@
                 android:importantForAccessibility="no" />
         </LinearLayout>
 
-        <!-- Force higher mirroring resolution (1440p) -->
         <include layout="@layout/settings_toggle_row"
-            android:id="@+id/row_force_high_res" />
+            android:id="@+id/row_advertise_in_background"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
 
-        <!-- Diagnostics: live state + recent log, fetchable over the LAN -->
         <include layout="@layout/settings_toggle_row"
-            android:id="@+id/row_diagnostics" />
+            android:id="@+id/row_start_on_boot"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
 
-        <!-- Lower mirroring resolution (720p) — the one setting that reduces work at the sender -->
-        <include layout="@layout/settings_toggle_row"
-            android:id="@+id/row_force_low_res" />
+        <!-- ── Section: Picture & sound ───────────────────────── -->
+        <include layout="@layout/settings_section_header"
+            android:id="@+id/header_picture_sound" />
 
         <!-- Smart fill: crop up to 15% rather than showing black bars -->
         <include layout="@layout/settings_toggle_row"
-            android:id="@+id/row_smart_fill" />
-
-        <!-- ── Section: Protocols ─────────────────────────────── -->
-        <include layout="@layout/settings_section_header"
-            android:id="@+id/header_protocols"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp" />
-
-        <include layout="@layout/settings_toggle_row"
-            android:id="@+id/row_airplay"
+            android:id="@+id/row_smart_fill"
             android:layout_width="match_parent"
             android:layout_height="72dp" />
-
-        <include layout="@layout/settings_toggle_row"
-            android:id="@+id/row_miracast"
-            android:layout_width="match_parent"
-            android:layout_height="72dp" />
-
-        <include layout="@layout/settings_toggle_row"
-            android:id="@+id/row_cast"
-            android:layout_width="match_parent"
-            android:layout_height="72dp" />
-
-        <!-- ── Section: AirPlay ───────────────────────────────── -->
-        <include layout="@layout/settings_section_header"
-            android:id="@+id/header_airplay"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp" />
 
         <include layout="@layout/settings_toggle_row"
             android:id="@+id/row_mirror_audio"
-            android:layout_width="match_parent"
-            android:layout_height="72dp" />
-
-        <!-- Withhold the AirPlay video-URL bit so senders always mirror -->
-        <include layout="@layout/settings_toggle_row"
-            android:id="@+id/row_force_screen_mirroring"
             android:layout_width="match_parent"
             android:layout_height="72dp" />
 
@@ -197,34 +166,79 @@
                 android:importantForAccessibility="no" />
         </LinearLayout>
 
+        <!-- Withhold the AirPlay video-URL bit so senders always mirror -->
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_force_screen_mirroring"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <!-- ── Section: Weak Wi-Fi ────────────────────────────── -->
+        <include layout="@layout/settings_section_header"
+            android:id="@+id/header_weak_wifi" />
+
+        <!-- Buffer a moment and play on the sender's clock, so stalls are absorbed -->
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_smooth_playback"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <!-- Offer 30 fps instead of 60: half the frames to send -->
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_light_stream"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <!-- Offer 720p instead of 1080p: fewer pixels to send -->
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_force_low_res"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <!-- Small on-screen note while the connection is struggling -->
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_weak_signal_badge"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <!-- Not a toggle: shows band, signal and link speed, with advice -->
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_wifi_check"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <!-- ── Section: Connections ───────────────────────────── -->
+        <include layout="@layout/settings_section_header"
+            android:id="@+id/header_connections" />
+
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_airplay"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_miracast"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
+        <include layout="@layout/settings_toggle_row"
+            android:id="@+id/row_cast"
+            android:layout_width="match_parent"
+            android:layout_height="72dp" />
+
         <include layout="@layout/settings_toggle_row"
             android:id="@+id/row_pin_auth"
             android:layout_width="match_parent"
             android:layout_height="72dp" />
 
-        <!-- ── Section: Service ───────────────────────────────── -->
+        <!-- ── Section: Troubleshooting ───────────────────────── -->
         <include layout="@layout/settings_section_header"
-            android:id="@+id/header_service"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp" />
+            android:id="@+id/header_troubleshooting" />
 
+        <!-- Diagnostics: live state + recent log, fetchable over the LAN -->
         <include layout="@layout/settings_toggle_row"
-            android:id="@+id/row_advertise_in_background"
+            android:id="@+id/row_diagnostics"
             android:layout_width="match_parent"
             android:layout_height="72dp" />
-
-        <include layout="@layout/settings_toggle_row"
-            android:id="@+id/row_start_on_boot"
-            android:layout_width="match_parent"
-            android:layout_height="72dp" />
-
-        <!-- ── Section: Developer ─────────────────────────────── -->
-        <include layout="@layout/settings_section_header"
-            android:id="@+id/header_developer"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp" />
 
         <include layout="@layout/settings_toggle_row"
             android:id="@+id/row_debug_overlay"
@@ -233,10 +247,7 @@
 
         <!-- ── Section: About ─────────────────────────────────── -->
         <include layout="@layout/settings_section_header"
-            android:id="@+id/header_about"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp" />
+            android:id="@+id/header_about" />
 
         <LinearLayout
             android:id="@+id/row_version"

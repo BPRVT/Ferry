@@ -3,6 +3,9 @@ package com.ferry.receiver.airplay.handshake
 import android.view.Surface
 import com.ferry.receiver.airplay.StreamStats
 import com.ferry.receiver.airplay.VideoDecoder
+import com.ferry.receiver.airplay.playout.NetworkTrace
+import com.ferry.receiver.airplay.playout.PlayoutScheduler
+import com.ferry.receiver.airplay.playout.SenderTimestamps
 import com.ferry.receiver.util.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -38,6 +41,12 @@ class MirrorStreamServer(
     private val surfaceProvider: () -> Surface?,
     private val width: Int = 1920,
     private val height: Int = 1080,
+    /**
+     * Settings → Weak Wi-Fi → Smooth playback. When true, frames are held and released on the
+     * sender's own clock, a little behind, so Wi-Fi stalls are absorbed instead of shown — see
+     * [PlayoutScheduler]. When false, every frame is decoded the moment it arrives, as through 8.0.0.
+     */
+    private val smoothPlayback: Boolean = false,
 ) {
     private sealed class Item
     private class Config(val sps: ByteArray, val pps: ByteArray) : Item()
@@ -50,6 +59,9 @@ class MirrorStreamServer(
      *   frame (every slice NAL has `nal_ref_idc == 0`), so dropping it under load costs a single
      *   invisible frame and needs no keyframe resync.
      * @param keyframe true when the frame carries an IDR slice, so the decoder can resync on it.
+     * @param releaseAtNs `System.nanoTime()` before which the decoder thread must not decode this
+     *   frame, or 0 to decode it as soon as it reaches the head of the queue. Set only with
+     *   [smoothPlayback] on.
      *
      * Both are computed in one pass on the reader thread by [classify], so the decoder thread never
      * walks the frame again.
@@ -59,11 +71,32 @@ class MirrorStreamServer(
         val length: Int,
         val disposable: Boolean,
         val keyframe: Boolean,
+        val releaseAtNs: Long = 0L,
     ) : Item()
 
     private val cipher = MirrorCrypto.streamCipher(aesKey, ecdhSecret, streamConnectionId)
     private val serverSocket = ServerSocket(0)            // OS-assigned free port
-    private val queue = ArrayBlockingQueue<Item>(QUEUE_CAPACITY)
+    /**
+     * Shallow (~267 ms) for immediate playback; deep enough for [SMOOTH_MAX_DELAY_MS] plus a burst
+     * with [smoothPlayback], because frames then *wait* here on purpose.
+     */
+    private val queueCapacity = if (smoothPlayback) SMOOTH_QUEUE_CAPACITY else QUEUE_CAPACITY
+    private val queue = ArrayBlockingQueue<Item>(queueCapacity)
+
+    /**
+     * Decides when each frame is released to the decoder. Reader thread only.
+     *
+     * Runs even with [smoothPlayback] off, because it is also what measures how late frames arrive,
+     * and that feeds the "Weak Wi-Fi" notice. Off, its answer is simply not used.
+     */
+    private val scheduler = PlayoutScheduler(minDelayMs = SMOOTH_MIN_DELAY_MS, maxDelayMs = SMOOTH_MAX_DELAY_MS)
+
+    /**
+     * A frame the decoder thread has taken off the queue but that is not due yet. Decoder thread
+     * only. Held here rather than peeked at the queue head so the reader's overflow handling can never
+     * pull a frame out from under a wait.
+     */
+    private var pending: Item? = null
 
     /**
      * The video path's own three threads, rather than `Dispatchers.IO`.
@@ -114,7 +147,9 @@ class MirrorStreamServer(
      * Thread-safe because both the reader (frames dropped at [enqueue]) and the decoder thread return
      * buffers to it.
      */
-    private val bufferPool = ArrayBlockingQueue<ByteArray>(FRAME_POOL_CAPACITY)
+    private val bufferPool = ArrayBlockingQueue<ByteArray>(
+        if (smoothPlayback) SMOOTH_FRAME_POOL_CAPACITY else FRAME_POOL_CAPACITY
+    )
 
     /**
      * Size the pool's buffers are cut to — the largest frame seen so far, so a keyframe does not have
@@ -224,7 +259,8 @@ class MirrorStreamServer(
 
     fun start(scope: CoroutineScope) {
         running = true
-        StreamStats.videoQueueCapacity = QUEUE_CAPACITY
+        StreamStats.videoQueueCapacity = queueCapacity
+        StreamStats.videoPlayoutDelayMs = 0
         publishDecoderState()
         scope.launch(dispatcher) { runReader() }
         scope.launch(dispatcher) { runDecoder() }
@@ -299,10 +335,12 @@ class MirrorStreamServer(
                         val len = MirrorCrypto.avccToAnnexBInPlace(decrypted, plainLen)
                         if (len > 0) {
                             val flags = Companion.classify(decrypted, len)
+                            val keyframe = (flags and FLAG_KEYFRAME) != 0
                             enqueue(Frame(
                                 decrypted, len,
                                 disposable = (flags and FLAG_DISPOSABLE) != 0,
-                                keyframe = (flags and FLAG_KEYFRAME) != 0,
+                                keyframe = keyframe,
+                                releaseAtNs = releaseTimeNs(header, payloadSize, keyframe),
                             ))
                         } else {
                             recycleFrameBuffer(decrypted)
@@ -330,6 +368,26 @@ class MirrorStreamServer(
             StreamStats.videoLinkUp = false
             Logger.w("Mirror data connection ended — video is dead until the session is re-established")
         }
+    }
+
+    /**
+     * Records this frame's timing and, with [smoothPlayback], returns when it should be decoded.
+     *
+     * Every frame goes into [NetworkTrace] and is measured for lateness whether or not smoothing is
+     * on — it is a few array writes, the trace is most valuable precisely from a session where
+     * something went wrong with the setting off, and the lateness drives the "Weak Wi-Fi" notice.
+     * Reader thread only, which is what [scheduler] requires.
+     */
+    private fun releaseTimeNs(header: ByteArray, size: Int, keyframe: Boolean): Long {
+        val nowNs = System.nanoTime()
+        val arrivalMs = nowNs / 1_000_000
+        val senderMs = SenderTimestamps.mirrorFrameMs(header) ?: return 0L
+        NetworkTrace.record(senderMs, arrivalMs, size, keyframe)
+        val releaseMs = scheduler.schedule(senderMs, arrivalMs)
+        StreamStats.noteLateness(scheduler.lastLatenessMs)
+        if (!smoothPlayback) return 0L
+        StreamStats.videoPlayoutDelayMs = scheduler.targetDelayMs.toInt()
+        return if (releaseMs <= arrivalMs) 0L else nowNs + (releaseMs - arrivalMs) * 1_000_000
     }
 
     /**
@@ -393,7 +451,8 @@ class MirrorStreamServer(
                 "(${StreamStats.videoDropPct}%) keyframeWaits=$keyframeWaits " +
                 "decoderDrops=${StreamStats.videoDecoderDrops} " +
                 "keyframeDrops=${StreamStats.videoKeyframeDrops} " +
-                "queue=${queue.size}/$QUEUE_CAPACITY ${StreamStats.videoFps}fps")
+                "queue=${queue.size}/$queueCapacity ${StreamStats.videoFps}fps" +
+                (if (smoothPlayback) " delay=${scheduler.targetDelayMs}ms" else ""))
         }
     }
 
@@ -650,7 +709,18 @@ class MirrorStreamServer(
                         nextRebuildAllowedNs = 0L
                     }
                 }
-                val item = queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
+                val item = pending ?: queue.poll(200, TimeUnit.MILLISECONDS) ?: continue
+                pending = null
+                // Smooth playback: hold the frame until its turn. Short sleeps rather than one long
+                // one, so a rebuild request or a shutdown is still noticed promptly.
+                if (item is Frame && item.releaseAtNs != 0L) {
+                    val waitNs = item.releaseAtNs - System.nanoTime()
+                    if (waitNs > 0) {
+                        pending = item
+                        Thread.sleep((waitNs / 1_000_000).coerceIn(1L, RELEASE_POLL_MS))
+                        continue
+                    }
+                }
                 try {
                     when (item) {
                         is Config -> configureDecoder(item.sps, item.pps)
@@ -671,6 +741,8 @@ class MirrorStreamServer(
         } catch (e: Exception) {
             if (running) Logger.e("Mirror decoder thread error", e)
         } finally {
+            (pending as? Frame)?.let { recycleFrameBuffer(it.annexB) }
+            pending = null
             decoder?.release()
             decoder = null
         }
@@ -828,7 +900,7 @@ class MirrorStreamServer(
         val accepted = d.decodeNalUnit(
             annexB, framePtsUs, length,
             keyframe = frame.keyframe,
-            waitBudgetMs = Companion.waitBudgetMs(queue.size),
+            waitBudgetMs = Companion.waitBudgetMs(queue.size, queueCapacity),
         )
 
         if (accepted) {
@@ -932,6 +1004,26 @@ class MirrorStreamServer(
          */
         private const val QUEUE_CAPACITY = 16
 
+        /**
+         * Queue depth with smooth playback: [SMOOTH_MAX_DELAY_MS] of frames at 60 fps, plus half a
+         * second for the burst that arrives when a stall ends. Holding frames is the point here, so
+         * the latency argument for [QUEUE_CAPACITY] does not apply — [PlayoutScheduler] bounds the
+         * delay instead.
+         */
+        private const val SMOOTH_QUEUE_CAPACITY = 90
+
+        /** Smallest added delay with smooth playback: a few frames, enough for ordinary jitter. */
+        const val SMOOTH_MIN_DELAY_MS = 60L
+
+        /**
+         * Largest. One second hides most real Wi-Fi stalls; much more and the picture visibly trails
+         * the iPad when you touch it. A stall longer than this still freezes, then resumes on time.
+         */
+        const val SMOOTH_MAX_DELAY_MS = 1_000L
+
+        /** Longest single sleep while a frame waits for its turn. */
+        private const val RELEASE_POLL_MS = 10L
+
         /** Reader, decoder, watchdog — one thread each, and no more. See [threads]. */
         private const val WORKER_THREADS = 3
 
@@ -946,6 +1038,12 @@ class MirrorStreamServer(
          * undershoot costs an allocation — the same one that used to happen every single frame.
          */
         private const val FRAME_POOL_CAPACITY = 8
+
+        /**
+         * With smooth playback, tens of frames legitimately sit in the queue, so eight pooled buffers
+         * would leave most of them allocating per frame — the garbage [bufferPool] exists to avoid.
+         */
+        private const val SMOOTH_FRAME_POOL_CAPACITY = 32
 
         /**
          * Largest frame the pool will hold a buffer for, and therefore the ceiling on what it costs:

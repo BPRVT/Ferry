@@ -8,9 +8,13 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import com.ferry.receiver.airplay.StreamStats
+import com.ferry.receiver.airplay.playout.PlayoutScheduler
+import com.ferry.receiver.airplay.playout.RtpClock
+import com.ferry.receiver.airplay.playout.SenderTimestamps
 import com.ferry.receiver.util.AudioGain
 import com.ferry.receiver.util.Logger
 import com.ferry.receiver.util.LoudnessBoost
+import com.ferry.receiver.util.PcmFade
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
@@ -50,6 +54,13 @@ class AudioStreamServer(
     private val channels: Int,
     private val codecType: Int = CT_AAC_ELD,   // SETUP ct: 8 = AAC-ELD (mirror), 4 = AAC-LC (audio-only)
     private val framesPerPacket: Int = DEFAULT_ALAC_FRAMES,   // SETUP spf — ALAC frameLength (352)
+    /**
+     * Settings → Weak Wi-Fi → Smooth playback. When true the audio buffer holds a cushion sized to
+     * how late packets have recently been (and to the video buffer's delay, so the two stay in sync),
+     * refills before resuming after a stall, and fades the edges of any gap. When false it plays
+     * packets as soon as they arrive, as through 8.0.0.
+     */
+    private val smoothPlayback: Boolean = false,
 ) {
     private val key = SecretKeySpec(MirrorCrypto.audioKey(aesKey, ecdhSecret), "AES")
     private val iv = IvParameterSpec(aesIv.copyOf(16))
@@ -91,7 +102,39 @@ class AudioStreamServer(
     // Decoded-audio jitter buffer: raw (post-dedup) RTP payloads handed from the receive thread to
     // the playback thread. Bounded so a stalled player can't grow latency unboundedly — if it fills
     // we drop the oldest frame (a brief glitch is better than ever-growing audio lag).
-    private val frameQueue = ArrayBlockingQueue<ByteArray>(AUDIO_QUEUE_CAPACITY)
+    private val frameQueue = ArrayBlockingQueue<ByteArray>(
+        if (smoothPlayback) SMOOTH_AUDIO_QUEUE_CAPACITY else AUDIO_QUEUE_CAPACITY
+    )
+
+    // ─── Lateness and smooth playback (the cushion is unused when it is off) ──
+    /** Milliseconds of audio in one packet, from the codec's fixed frame size. */
+    private val packetMs: Double = when (codecType) {
+        CT_AAC_ELD -> 480.0
+        CT_AAC_LC -> 1024.0
+        else -> framesPerPacket.toDouble()
+    } * 1000.0 / sampleRate.coerceAtLeast(1)
+
+    /**
+     * Measures how late packets arrive. Receive thread only. Runs with smooth playback off too: the
+     * measurement also drives the "Weak Wi-Fi" notice.
+     */
+    private val lateness = PlayoutScheduler(minDelayMs = SMOOTH_MIN_DELAY_MS, maxDelayMs = SMOOTH_MAX_DELAY_MS)
+    private val rtpClock = RtpClock(sampleRate)
+    /** Receive thread only: when the last packet arrived, for [AUDIO_SILENCE_RESET_MS]. */
+    private var lastPacketMs = Long.MIN_VALUE
+
+    /** Packets to hold before playing; written by the receive thread, read by playback. */
+    @Volatile private var targetDepth = if (smoothPlayback) depthFor(SMOOTH_MIN_DELAY_MS, packetMs) else 0
+
+    /** Playback thread only: the speed the track is currently set to, as a fraction of nominal. */
+    private var smoothRate = 1.0
+
+    /** Playback thread only: waiting for the buffer to refill after it ran dry. */
+    private var rebuffering = smoothPlayback
+    /** Playback thread only: the next PCM written should fade in from silence. */
+    private var fadeInNext = false
+    /** Playback thread only: the PCM about to be written should fade out to silence. */
+    private var fadeOutThis = false
 
     // RTP duplicate suppression. macOS sends each realtime-audio packet 2–3× for redundancy
     // (same 16-bit sequence number). Decoding every copy feeds the AAC decoder duplicate frames
@@ -147,6 +190,7 @@ class AudioStreamServer(
     fun start(scope: CoroutineScope) {
         running = true
         StreamStats.audioActive = true
+        StreamStats.audioPlayoutDelayMs = 0
         scope.launch(dispatcher) { runPlayback() }   // decode + play (may block on AudioTrack)
         scope.launch(dispatcher) { runReceive() }    // drain socket fast (never blocks on audio)
         scope.launch(dispatcher) { runControl() }    // capture sender addr + handle resend replies
@@ -218,7 +262,7 @@ class AudioStreamServer(
                     Logger.i("Audio RTP[$rtpCount] ${packet.length}B hdr: ${hex(packet.data, minOf(20, packet.length))}")
                     rtpCount++
                 }
-                handleRtpPacket(packet.data, 0, packet.length)
+                handleRtpPacket(packet.data, 0, packet.length, fromDataSocket = true)
                 StreamStats.audioQueue = frameQueue.size
                 if (recv % 500 == 0) {
                     // recv already counts EVERY datagram, duplicates included — it is
@@ -242,11 +286,10 @@ class AudioStreamServer(
      * reorder buffer. [src] may be a reused receive buffer, so the payload is copied out before any
      * cross-thread handoff. Thread-safe: the reorder buffer + dedup are accessed under [reorderLock].
      */
-    private fun handleRtpPacket(src: ByteArray, offset: Int, length: Int) {
+    private fun handleRtpPacket(src: ByteArray, offset: Int, length: Int, fromDataSocket: Boolean = false) {
         if (length <= RTP_HEADER) return
         val seq = ((src[offset + 2].toInt() and 0xFF) shl 8) or (src[offset + 3].toInt() and 0xFF)
-        var resend: IntArray? = null
-        synchronized(reorderLock) {
+        val resend: IntArray? = synchronized(reorderLock) {
             // Dedup BEFORE copying. macOS sends each realtime-audio packet 2–3× for redundancy, so
             // two thirds of everything arriving here is discarded one line later — and the copy used
             // to happen first, which meant two thirds of these allocations existed only to be thrown
@@ -255,10 +298,39 @@ class AudioStreamServer(
             if (isDuplicateSeq(seq)) { dupCount++; return }
             // RAOP RTP: 12-byte header, then AES-128-CBC-encrypted audio payload. Copied out of
             // [src] because that is a reused receive buffer and this outlives the current receive.
-            resend = enqueueInOrder(seq, src.copyOfRange(offset + RTP_HEADER, offset + length))
+            enqueueInOrder(seq, src.copyOfRange(offset + RTP_HEADER, offset + length))
         }
         // Send the resend request OUTSIDE the reorder lock — never hold it across socket I/O.
         resend?.let { requestResend(it[0], it[1]) }
+        // Only first copies straight off the data socket say anything about the link: redundant copies
+        // (dropped above) and resend replies are late by design, and counting them would read as a storm.
+        if (fromDataSocket) measureLateness(src, offset)
+    }
+
+    /**
+     * Updates the cushion the audio buffer holds, from how late this packet was. Receive thread only.
+     *
+     * The cushion is the larger of what the audio link needs and the delay the video buffer is
+     * adding. Matching the video is what keeps lips in sync: both pipelines then run the same
+     * distance behind the sender.
+     */
+    private fun measureLateness(src: ByteArray, offset: Int) {
+        val rtp = SenderTimestamps.rtpTimestamp(src, offset) ?: return
+        val nowMs = System.nanoTime() / 1_000_000
+        // A full second with no audio at all is the sender going quiet, not the link — and whether
+        // its RTP clock kept running through that silence is the sender's business. Start the
+        // measurement over rather than risk reading a paused clock as a second of lateness. Network
+        // stalls of that length are still caught: the video clock is wall time and cannot pause,
+        // and the cushion below follows the video's delay.
+        if (lastPacketMs != Long.MIN_VALUE && nowMs - lastPacketMs > AUDIO_SILENCE_RESET_MS) lateness.reset()
+        lastPacketMs = nowMs
+        lateness.schedule(rtpClock.toMs(rtp), nowMs)
+        StreamStats.noteLateness(lateness.lastLatenessMs)
+        if (!smoothPlayback) return
+        val videoMs = StreamStats.videoPlayoutDelayMs.toLong()
+        val targetMs = maxOf(lateness.targetDelayMs, videoMs).coerceAtMost(SMOOTH_MAX_DELAY_MS)
+        targetDepth = Companion.depthFor(targetMs, packetMs)
+        StreamStats.audioPlayoutDelayMs = targetMs.toInt()
     }
 
     /**
@@ -329,7 +401,24 @@ class AudioStreamServer(
             initDecoder()
             initAudioTrack()
             while (running) {
+                // Smooth playback: after running dry, wait for the cushion to refill before playing
+                // again, instead of trickling out each packet as it arrives and running dry again.
+                if (rebuffering) {
+                    if (frameQueue.size < targetDepth.coerceAtLeast(1)) {
+                        Thread.sleep(REBUFFER_POLL_MS)
+                        continue
+                    }
+                    rebuffering = false
+                    fadeInNext = true
+                }
                 val payload = frameQueue.poll(200, TimeUnit.MILLISECONDS) ?: continue
+                // Ran dry: this is the last audio before a gap, so fade it out rather than stopping on
+                // a step, and refill before resuming. Off when smooth playback is off — at the shallow
+                // default depth the queue empties routinely and that is not a gap.
+                if (smoothPlayback && frameQueue.isEmpty()) {
+                    rebuffering = true
+                    fadeOutThis = true
+                }
                 // Cheap no-op unless the user just changed the setting, so the boost applies to
                 // audio already playing rather than at the next session.
                 audioTrack?.let { boost.sync(it.audioSessionId, StreamStats.audioBoostDb) }
@@ -363,6 +452,7 @@ class AudioStreamServer(
     private fun playAlacFrame(frame: ByteArray) {
         val pcm = alac?.decode(frame) ?: return
         if (firstPcm) { Logger.i("Audio: first decoded ALAC PCM (${pcm.size}B) → AudioTrack"); firstPcm = false }
+        shapeGapEdges(pcm, pcm.size)
         audioTrack?.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
     }
 
@@ -401,12 +491,21 @@ class AudioStreamServer(
             val pcm = pcmBufferFor(bufferInfo.size)
             outBuf.position(bufferInfo.offset); outBuf.get(pcm, 0, bufferInfo.size)
             if (firstPcm) { Logger.i("Audio: first decoded PCM (${bufferInfo.size}B) → AudioTrack"); firstPcm = false }
+            shapeGapEdges(pcm, bufferInfo.size)
             // Blocking write paces playback to the audio clock and drops no PCM. Safe here because
             // this runs on the dedicated playback thread, not the socket-receive thread.
             audioTrack?.write(pcm, 0, bufferInfo.size, AudioTrack.WRITE_BLOCKING)
             mc.releaseOutputBuffer(outIdx, false)
             outIdx = mc.dequeueOutputBuffer(bufferInfo, 0)
         }
+    }
+
+    /** Applies any pending gap fade to PCM about to be written. Playback thread only. */
+    private fun shapeGapEdges(pcm: ByteArray, length: Int) {
+        if (!fadeInNext && !fadeOutThis) return
+        val ramp = PcmFade.framesFor(GAP_FADE_MS, sampleRate)
+        if (fadeInNext) { PcmFade.fadeIn(pcm, length, channels, ramp); fadeInNext = false }
+        if (fadeOutThis) { PcmFade.fadeOut(pcm, length, channels, ramp); fadeOutThis = false }
     }
 
     /** Reusable PCM staging buffer, grown on demand. See [decodeFrame] for why reuse is safe. */
@@ -464,6 +563,7 @@ class AudioStreamServer(
      */
     private fun applyLatencyCatchUp() {
         val track = audioTrack ?: return
+        if (smoothPlayback) { applySmoothRate(track); return }
         val target = Companion.shouldCatchUp(frameQueue.size, catchingUpLatency)
         if (target == catchingUpLatency) return
         val rate = if (target) (sampleRate * AUDIO_CATCHUP_RATE).toInt() else sampleRate
@@ -481,6 +581,23 @@ class AudioStreamServer(
                 "${(AUDIO_CATCHUP_RATE * 100).toInt()}% speed"
             else "Audio: latency back to target (${frameQueue.size} queued) — nominal speed"
         )
+    }
+
+    /**
+     * Smooth playback's version of [applyLatencyCatchUp]: steer the queue toward the cushion from
+     * either side. Too deep → play 2% fast; too shallow → 2% slow, which is how the cushion grows when
+     * the Wi-Fi gets worse without inserting silence. Both are inaudible for the same reason
+     * [AUDIO_CATCHUP_RATE] is.
+     */
+    private fun applySmoothRate(track: AudioTrack) {
+        val desired = Companion.smoothRateFor(frameQueue.size, targetDepth, smoothRate)
+        if (desired == smoothRate) return
+        val applied = runCatching { track.playbackRate = (sampleRate * desired).toInt() }
+            .onFailure { Logger.w("Audio: playback rate ${desired}x rejected — ${it.message}") }
+            .isSuccess
+        if (!applied) return
+        smoothRate = desired
+        StreamStats.audioCatchUp = desired > 1.0
     }
 
     private fun initAudioTrack() {
@@ -594,6 +711,48 @@ class AudioStreamServer(
         internal fun shouldCatchUp(depth: Int, currentlyCatchingUp: Boolean): Boolean =
             if (currentlyCatchingUp) depth > AUDIO_CATCHUP_TARGET
             else depth >= AUDIO_CATCHUP_HIGH_WATER
+
+        /** Packets of cushion needed to hold [delayMs] of audio, at [packetMs] per packet. */
+        internal fun depthFor(delayMs: Long, packetMs: Double): Int =
+            if (packetMs <= 0.0) 0 else kotlin.math.ceil(delayMs / packetMs).toInt()
+
+        /**
+         * Queue depth with smooth playback: [SMOOTH_MAX_DELAY_MS] of AAC-ELD (~11 ms a packet) plus
+         * room for the burst at the end of a stall.
+         */
+        private const val SMOOTH_AUDIO_QUEUE_CAPACITY = 160
+
+        /** Matches MirrorStreamServer's floor, so audio and video start the same distance behind. */
+        private const val SMOOTH_MIN_DELAY_MS = 60L
+        private const val SMOOTH_MAX_DELAY_MS = 1_000L
+
+        /** Silence after which audio lateness is measured afresh. See [measureLateness]. */
+        private const val AUDIO_SILENCE_RESET_MS = 1_000L
+
+        /** How far past the cushion the queue may grow before playback speeds up to drain it. */
+        private const val SMOOTH_CATCHUP_SLACK = 10
+
+        private const val SMOOTH_SLOW_RATE = 0.98
+
+        /**
+         * Playback speed for smooth playback, given the queue [depth], the cushion [target] and the
+         * speed now. Hysteresis on both sides so the pitch never wobbles: once speeding up it keeps
+         * going until the cushion is reached, likewise slowing down, and it only starts either when
+         * the queue is clearly off — [SMOOTH_CATCHUP_SLACK] over, or under half.
+         */
+        internal fun smoothRateFor(depth: Int, target: Int, current: Double): Double = when {
+            current > 1.0 -> if (depth > target) current else 1.0
+            current < 1.0 -> if (depth < target) current else 1.0
+            depth >= target + SMOOTH_CATCHUP_SLACK -> AUDIO_CATCHUP_RATE
+            target >= 4 && depth < target / 2 -> SMOOTH_SLOW_RATE
+            else -> 1.0
+        }
+
+        /** Poll interval while refilling after a stall. */
+        private const val REBUFFER_POLL_MS = 5L
+
+        /** Length of the fade on each side of a gap. Long enough to kill the click, short enough to miss. */
+        private const val GAP_FADE_MS = 5
 
         // Sliding window of recently-played RTP sequence numbers for duplicate suppression.
         // ~11 s at 92 packets/s — far longer than any retransmit gap, far shorter than the

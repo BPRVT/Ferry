@@ -45,7 +45,8 @@ worth naming:
 | **Screensaver** | The Fire TV screensaver no longer interrupts an active session. This is why the project exists. [Details below.](#the-screensaver-fix) |
 | **Self-recovery** | A stall watchdog and automatic decoder rebuilds. Ferry never ends a session on its own — only the sender does — so a paused video can sit for as long as you like. Crashes and main-thread freezes are recorded and shown on the TV at the next launch, because the device has no adb. |
 | **Video pipeline** | Asynchronous MediaCodec decode, realtime codec priority, low-latency mode, dedicated display-priority threads, a shallow bounded frame queue that sheds non-reference frames first, in-place AVCC→Annex-B conversion, and pooled buffers on both sides of the decrypt. Latency and GC pressure, both reduced deliberately. |
-| **Picture** | Smart fill (crop a capped slice instead of showing black bars), and a resolution choice — 720p for smoothness, 1080p, or 1440p for sharper text. |
+| **Picture** | Smart fill (crop a capped slice instead of showing black bars), and a 720p option for smoothness. |
+| **Weak Wi-Fi** | Smooth playback (an adaptive buffer that plays on the sender's own clock, so Wi-Fi stalls are absorbed instead of frozen), a 30 fps light stream, an on-screen "Weak Wi-Fi" notice, a Wi-Fi check with plain advice, and ExoPlayer for video-URL playback with a 30–60 s read-ahead. A bad-Wi-Fi simulator in the tests replays stalls, jitter and bursts — or a real trace captured on the TV — against the buffer. |
 | **Audio** | Correct dB→amplitude volume mapping, volume on the legacy RAOP path, and an optional compressing loudness boost for quiet sources. |
 | **AirPlay modes** | "Always mirror the screen" — withholds the video-URL capability bit so senders stop popping out into their own player. |
 | **Security** | Hardened LAN-facing parsers (RTSP reader stack overflow, unbounded FU-A reassembly, config-frame bounds), SRP PIN pairing with a persistent lockout, scoped-down location permissions. |
@@ -97,7 +98,7 @@ Network**.
 
 ```bash
 adb connect 192.168.1.42:5555
-adb install -r ferry-v8.0.0-firetv.apk
+adb install -r ferry-v8.1.0-firetv.apk
 ```
 
 Accept the authorization prompt on the TV the first time. Then launch **Ferry** from the
@@ -287,16 +288,26 @@ observation rather than by trusting a source review.
 
 | Setting | Default | What it does |
 |---|---|---|
+| **General** | | |
 | Device name | `Ferry` | The name shown in the sender's AirPlay picker. |
-| Require pairing PIN | **Off** | Show a code on the TV that must be entered to connect. Off means anyone on the network can mirror. |
-| Always mirror the screen | Off | Stops apps opening their own player on the TV. |
-| Higher resolution (1440p) | Off | Sharper text, more decode work. |
-| Smart fill | On | Fill the screen by cropping a capped slice rather than showing black bars. |
-| Mirroring audio | On | Accept the audio stream that accompanies a mirror session. |
-| Audio boost | Off | Up to +12 dB of compressing gain for quiet sources. |
 | Keep receiving when closed | **Off** | Stay visible to senders after you leave Ferry. Off means Ferry only receives while it is open — see [Security](#security). |
 | Start on boot | Off | Launch the receiver when the TV starts. Implies "Keep receiving when closed". |
-| Debug overlay | Off | On-screen HUD: pipeline state and counters — decoder status, frames shown, time since the last frame arrived and was displayed, plus any watchdog decoder rebuilds. |
+| **Picture & sound** | | |
+| Smart fill | On | Fill the screen by cropping a capped slice rather than showing black bars. |
+| Mirror audio | On | Accept the audio stream that accompanies a mirror session. |
+| Audio boost | Off | Up to +12 dB of compressing gain for quiet sources. |
+| Always mirror the screen | Off | Stops apps opening their own player on the TV. Leave off on weak Wi-Fi: an app's own player streams straight from the internet with a long buffer. |
+| **Weak Wi-Fi** | | |
+| Smooth playback | Off | Buffers a moment of picture and sound — about 60 ms on a clean link, up to a second after drops — so Wi-Fi hiccups don't freeze the screen. |
+| Light stream (30 fps) | Off | Asks the sender for half the frames, so there is less to send. |
+| Lower resolution (720p) | Off | Asks the sender for fewer pixels, so there is less to send. |
+| Weak Wi-Fi notice | On | A small note on screen while the connection is struggling. |
+| Check my Wi-Fi | — | Band, signal and link speed for this TV, with what would help. |
+| **Connections** | | |
+| Require pairing PIN | **Off** | Show a code on the TV that must be entered to connect. Off means anyone on the network can mirror. |
+| **Troubleshooting** | | |
+| Diagnostics & logs | — | Current state and recent log, plus a Wi-Fi timing trace at `/trace.csv`, fetchable from a phone. |
+| Debug overlay | Off | On-screen HUD: pipeline state and counters — decoder status, frames shown, time since the last frame arrived and was displayed, buffer delays, plus any watchdog decoder rebuilds. |
 
 ---
 
