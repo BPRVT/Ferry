@@ -61,6 +61,7 @@ class SettingsFragment : Fragment() {
     private lateinit var rowPinAuth: View
     private lateinit var rowForceScreenMirroring: View
     private lateinit var rowSmartFill: View
+    private lateinit var rowPausedScreen: View
     private lateinit var rowAudioBoost: LinearLayout
     private lateinit var textAudioBoostValue: TextView
     private lateinit var rowAdvertiseInBackground: View
@@ -109,6 +110,7 @@ class SettingsFragment : Fragment() {
         rowPinAuth          = view.findViewById(R.id.row_pin_auth)
         rowForceScreenMirroring = view.findViewById(R.id.row_force_screen_mirroring)
         rowSmartFill        = view.findViewById(R.id.row_smart_fill)
+        rowPausedScreen     = view.findViewById(R.id.row_paused_screen)
         rowAudioBoost       = view.findViewById(R.id.row_audio_boost)
         textAudioBoostValue = view.findViewById(R.id.text_audio_boost_value)
         rowAdvertiseInBackground = view.findViewById(R.id.row_advertise_in_background)
@@ -156,6 +158,7 @@ class SettingsFragment : Fragment() {
         configureToggleRow(rowForceScreenMirroring,
             R.string.setting_force_screen_mirroring, R.string.setting_force_screen_mirroring_subtitle)
         configureToggleRow(rowSmartFill,    R.string.setting_smart_fill,         R.string.setting_smart_fill_subtitle)
+        configureToggleRow(rowPausedScreen, R.string.setting_paused_screen,      R.string.setting_paused_screen_subtitle)
         configureToggleRow(rowAdvertiseInBackground,
             R.string.setting_advertise_in_background, R.string.setting_advertise_in_background_subtitle)
         configureToggleRow(rowStartOnBoot,  R.string.setting_start_on_boot,
@@ -219,6 +222,7 @@ class SettingsFragment : Fragment() {
         setToggle(rowMirrorAudio,  settings.mirrorAudioEnabled)
         setToggle(rowPinAuth,      settings.airPlayPinAuthEnabled)
         setToggle(rowSmartFill,    settings.smartFillEnabled)
+        setToggle(rowPausedScreen, settings.pausedScreen)
         setToggle(rowForceScreenMirroring, settings.forceScreenMirroring)
         setToggle(rowAdvertiseInBackground, settings.advertiseInBackground)
         setToggle(rowStartOnBoot,  settings.startOnBoot)
@@ -307,6 +311,11 @@ class SettingsFragment : Fragment() {
             save { it.copy(weakSignalBadge = enabled) }
         }
         rowWifiCheck.setOnClickListener { showWifiCheck() }
+        setToggleListener(rowPausedScreen) { enabled ->
+            // Live: StreamingScreen reads the flag on its tick, so it applies to a paused cast now.
+            StreamStats.pausedScreenEnabled = enabled
+            save { it.copy(pausedScreen = enabled) }
+        }
         setToggleListener(rowSmartFill)    { enabled ->
             // Push straight to StreamStats as well as persisting: StreamingScreen reads the flag on
             // its layout tick, so the picture re-fits within ~200 ms instead of at the next session.
@@ -468,6 +477,7 @@ class SettingsFragment : Fragment() {
             StreamStats.audioBoostDb = defaults.audioBoostDb
             StreamStats.smartFillEnabled = defaults.smartFillEnabled
             StreamStats.weakSignalBadgeEnabled = defaults.weakSignalBadge
+            StreamStats.pausedScreenEnabled = defaults.pausedScreen
             populateUI(defaults)
             Logger.i("Settings reset to defaults")
         }

@@ -403,6 +403,11 @@ class MainActivity : AppCompatActivity() {
             return true
         }
         val overlayActive = currentNowPlaying != null || currentAirPlayState == ProtocolState.CONNECTED
+        // Any button during a session lifts the paused-screen dim (see util/IdleScreen). Recorded
+        // before the key is routed, and without consuming it, so play/pause still reaches the sender.
+        if (currentAirPlayState == ProtocolState.CONNECTED) {
+            com.ferry.receiver.airplay.StreamStats.lastUserActivityMs = System.currentTimeMillis()
+        }
         if (overlayActive) {
             val command = when (keyCode) {
                 android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,

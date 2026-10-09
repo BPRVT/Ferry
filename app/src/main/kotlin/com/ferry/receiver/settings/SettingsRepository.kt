@@ -124,6 +124,7 @@ class SettingsRepository(private val context: Context) {
         smoothPlayback     = this[Keys.SMOOTH_PLAYBACK]         ?: false,
         lightStream        = this[Keys.LIGHT_STREAM]            ?: false,
         weakSignalBadge    = this[Keys.WEAK_SIGNAL_BADGE]       ?: true,
+        pausedScreen       = this[Keys.PAUSED_SCREEN]           ?: true,
         audioBoostDb       = com.ferry.receiver.util.AudioGain.clampBoostDb(this[Keys.AUDIO_BOOST_DB] ?: 0)
     )
 
@@ -150,6 +151,7 @@ class SettingsRepository(private val context: Context) {
         this[Keys.SMOOTH_PLAYBACK]      = settings.smoothPlayback
         this[Keys.LIGHT_STREAM]         = settings.lightStream
         this[Keys.WEAK_SIGNAL_BADGE]    = settings.weakSignalBadge
+        this[Keys.PAUSED_SCREEN]        = settings.pausedScreen
         this[Keys.AUDIO_BOOST_DB]       = settings.audioBoostDb
     }
 
@@ -175,6 +177,7 @@ class SettingsRepository(private val context: Context) {
         val SMOOTH_PLAYBACK     = booleanPreferencesKey("smooth_playback")
         val LIGHT_STREAM        = booleanPreferencesKey("light_stream")
         val WEAK_SIGNAL_BADGE   = booleanPreferencesKey("weak_signal_badge")
+        val PAUSED_SCREEN       = booleanPreferencesKey("paused_screen")
         val FORCE_LOW_RESOLUTION  = booleanPreferencesKey("force_low_resolution")
         val MIRROR_AUDIO_ENABLED = booleanPreferencesKey("mirror_audio_enabled")
         val AUDIO_BOOST_DB      = intPreferencesKey("audio_boost_db")

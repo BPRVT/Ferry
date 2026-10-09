@@ -180,4 +180,10 @@ class AppSettingsTest {
         assertFalse(AppSettings.DEFAULT.lightStream)
         assertTrue(AppSettings.DEFAULT.weakSignalBadge)
     }
+
+    /** Ferry holds the TV awake, so the paused screen is what protects a still frame. On. */
+    @Test
+    fun `paused screen is on by default`() {
+        assertTrue(AppSettings.DEFAULT.pausedScreen)
+    }
 }

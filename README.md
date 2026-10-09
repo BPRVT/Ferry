@@ -98,7 +98,7 @@ Network**.
 
 ```bash
 adb connect 192.168.1.42:5555
-adb install -r ferry-v8.1.0-firetv.apk
+adb install -r ferry-v8.2.0-firetv.apk
 ```
 
 Accept the authorization prompt on the TV the first time. Then launch **Ferry** from the
@@ -294,6 +294,7 @@ observation rather than by trusting a source review.
 | Start on boot | Off | Launch the receiver when the TV starts. Implies "Keep receiving when closed". |
 | **Picture & sound** | | |
 | Smart fill | On | Fill the screen by cropping a capped slice rather than showing black bars. |
+| Paused screen | On | When the picture is still (a paused video), a "Still connected" note with a pulsing dot after 5 s; after 5 minutes the picture dims and the note drifts, so a paused frame cannot burn in. Says so if the connection has actually closed. |
 | Mirror audio | On | Accept the audio stream that accompanies a mirror session. |
 | Audio boost | Off | Up to +12 dB of compressing gain for quiet sources. |
 | Always mirror the screen | Off | Stops apps opening their own player on the TV. Leave off on weak Wi-Fi: an app's own player streams straight from the internet with a long buffer. |

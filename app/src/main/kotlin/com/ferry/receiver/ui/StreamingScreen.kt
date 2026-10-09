@@ -1,8 +1,11 @@
 package com.ferry.receiver.ui
 
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.util.AttributeSet
@@ -10,10 +13,13 @@ import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.Surface
+import android.view.View
+import android.widget.LinearLayout
 import android.widget.FrameLayout
 import android.widget.TextView
 import com.ferry.receiver.R
 import com.ferry.receiver.airplay.StreamStats
+import com.ferry.receiver.util.IdleScreen
 import com.ferry.receiver.util.Logger
 import com.ferry.receiver.util.VideoFit
 
@@ -76,6 +82,42 @@ class StreamingScreen @JvmOverloads constructor(
         visibility = GONE
     }
 
+    // ─── Paused screen (Settings → Picture & sound → Paused screen; see util/IdleScreen) ───
+
+    /** Black layer over the picture, faded in after a long pause so a still frame cannot burn in. */
+    private val dimLayer = View(context).apply {
+        setBackgroundColor(Color.BLACK)
+        alpha = 0f
+        visibility = GONE
+    }
+
+    private val idleDotShape = GradientDrawable().apply { shape = GradientDrawable.OVAL }
+    private val idleDot = View(context).apply { background = idleDotShape }
+    private val idleText = TextView(context).apply {
+        setTextColor(Color.WHITE)
+        textSize = 15f
+    }
+
+    /** "Still connected" (or "Connection lost"), with a dot that breathes so the screen is visibly alive. */
+    private val idleNote = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setBackgroundColor(Color.parseColor("#99000000"))
+        setPadding(24, 12, 24, 12)
+        val dot = (12 * resources.displayMetrics.density).toInt()
+        addView(idleDot, LinearLayout.LayoutParams(dot, dot).apply { marginEnd = dot })
+        addView(idleText)
+        visibility = GONE
+    }
+
+    private val dotPulse = ObjectAnimator.ofFloat(idleDot, View.ALPHA, 1f, 0.2f).apply {
+        duration = PULSE_MS
+        repeatMode = ValueAnimator.REVERSE
+        repeatCount = ValueAnimator.INFINITE
+    }
+
+    private var idleLook = IdleScreen.Look.NOTHING
+
     // Last applied surface size, so we only re-layout on an actual change (rotation/resolution switch).
     private var lastSurfaceW = Int.MIN_VALUE
     private var lastSurfaceH = Int.MIN_VALUE
@@ -93,6 +135,7 @@ class StreamingScreen @JvmOverloads constructor(
             val showBadge = StreamStats.weakSignalBadgeEnabled && StreamStats.isStruggling()
             val badgeVisibility = if (showBadge) VISIBLE else GONE
             if (weakSignalBadge.visibility != badgeVisibility) weakSignalBadge.visibility = badgeVisibility
+            updateIdleScreen()
             handler.postDelayed(this, REFRESH_MS)
         }
     }
@@ -108,6 +151,9 @@ class StreamingScreen @JvmOverloads constructor(
             LayoutParams.MATCH_PARENT,
             LayoutParams.MATCH_PARENT
         ).apply { gravity = Gravity.CENTER })
+
+        // Paused-screen dim, directly above the picture and below every note, so they stay readable.
+        addView(dimLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
 
         // Debug HUD overlay, top-left, above the video surface.
         //
@@ -129,6 +175,11 @@ class StreamingScreen @JvmOverloads constructor(
             LayoutParams.WRAP_CONTENT,
             LayoutParams.WRAP_CONTENT
         ).apply { gravity = Gravity.BOTTOM or Gravity.END; bottomMargin = safeY; rightMargin = safeX })
+        // Paused-screen note: bottom-left, clear of the Weak Wi-Fi note; drifts while dimmed.
+        addView(idleNote, LayoutParams(
+            LayoutParams.WRAP_CONTENT,
+            LayoutParams.WRAP_CONTENT
+        ).apply { gravity = Gravity.BOTTOM or Gravity.START; bottomMargin = safeY; leftMargin = safeX })
 
         // Register a callback to track when the Surface is created/destroyed
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
@@ -222,6 +273,61 @@ class StreamingScreen @JvmOverloads constructor(
         }
     }
 
+    /** Applies [IdleScreen]'s verdict for this tick. Main thread, from [tick]. */
+    private fun updateIdleScreen() {
+        val now = System.currentTimeMillis()
+        val look = IdleScreen.look(
+            nowMs = now,
+            enabled = StreamStats.pausedScreenEnabled,
+            lastArrivalMs = StreamStats.videoLastArrivalMs,
+            linkUp = StreamStats.videoLinkUp,
+            lastActivityMs = StreamStats.lastUserActivityMs,
+        )
+        if (look != idleLook) {
+            applyIdleLook(look)
+            idleLook = look
+        }
+        if (look.dimmed) driftIdleNote(now)
+    }
+
+    private fun applyIdleLook(look: IdleScreen.Look) {
+        if (look.note == IdleScreen.Note.NONE) {
+            idleNote.visibility = GONE
+            dotPulse.cancel()
+        } else {
+            val lost = look.note == IdleScreen.Note.LINK_LOST
+            idleText.setText(if (lost) R.string.paused_screen_link_lost else R.string.paused_screen_connected)
+            idleDotShape.setColor(Color.parseColor(if (lost) "#FFFFB300" else "#FF4CAF50"))
+            if (idleNote.visibility != VISIBLE) {
+                idleNote.visibility = VISIBLE
+                dotPulse.start()
+            }
+        }
+        if (look.dimmed) {
+            if (dimLayer.visibility != VISIBLE) {
+                dimLayer.visibility = VISIBLE
+                dimLayer.animate().alpha(IdleScreen.DIM_ALPHA).setDuration(DIM_FADE_MS).start()
+            }
+        } else {
+            // Waking is instant: the moment the picture moves, it should be seen at full brightness.
+            dimLayer.animate().cancel()
+            dimLayer.alpha = 0f
+            dimLayer.visibility = GONE
+            idleNote.translationX = 0f
+            idleNote.translationY = 0f
+        }
+    }
+
+    /** Moves the note along [IdleScreen.driftPosition] within the overscan-safe area. */
+    private fun driftIdleNote(now: Long) {
+        val (fx, fy) = IdleScreen.driftPosition(now)
+        val lp = idleNote.layoutParams as LayoutParams
+        val freeW = (width - idleNote.width - lp.leftMargin * 2).coerceAtLeast(0)
+        val freeH = (height - idleNote.height - lp.bottomMargin * 2).coerceAtLeast(0)
+        idleNote.translationX = fx * freeW
+        idleNote.translationY = -fy * freeH
+    }
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         handler.post(tick)                 // drive aspect-fit + debug HUD
@@ -229,11 +335,18 @@ class StreamingScreen @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         handler.removeCallbacks(tick)
+        dotPulse.cancel()
         super.onDetachedFromWindow()
     }
 
     companion object {
         private const val REFRESH_MS = 200L
+
+        /** One breath of the paused-screen dot, in each direction. */
+        private const val PULSE_MS = 1_200L
+
+        /** How gently the picture dims after a long pause. */
+        private const val DIM_FADE_MS = 2_000L
 
         /**
          * Android TV overscan-safe margins in dp — the 5% of each edge a television is free to

@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.2.0] - 2026-10-09
+
+Pause a video on the iPad and the TV used to show a frozen frame — which looks exactly like a crash,
+and stayed on screen for as long as you liked.
+
+### Added
+
+- **Paused screen** (Settings → Picture & sound, on by default). When the mirrored picture has been
+  still for 5 seconds, a small "Still connected" note with a slowly pulsing dot appears in the corner,
+  so the screen visibly has something alive on it. After 5 minutes the picture dims and the note
+  drifts slowly around the screen. That second part matters more than it looks: Ferry keeps the TV
+  awake for the whole session, which also keeps the TV's own screensaver away, so a paused frame
+  could otherwise sit unchanged for hours — a real burn-in risk on OLED sets. A new frame clears
+  everything instantly; any remote button lifts the dim (and play/pause still reaches the sender).
+- If the sender's video connection has actually closed, the note says **"Connection lost — start
+  mirroring again on your device"** instead. That is a socket closing, never a guess from silence,
+  so a pause cannot produce it — and there is nothing to dismiss.
+
+### Unchanged, and worth saying
+
+- The connection itself already stays up through a pause: Ferry answers the sender's keep-alive
+  (`/feedback`, every ~2 s), keeps its own timing exchange running, holds the Wi-Fi in its
+  high-performance mode, and since 8.0.0 never ends a session on its own. What it cannot control is
+  the sending device: if the iPad locks or stops mirroring, that ends the session from its side.
+
+---
+
 ## [8.1.0] - 2026-10-09
 
 Weak Wi-Fi. Mirroring on a connection that drops — not great, but Wi-Fi — and a tidier Settings

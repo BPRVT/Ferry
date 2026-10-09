@@ -210,6 +210,15 @@ object StreamStats {
     /** Mirrored from the "Weak Wi-Fi badge" setting; [com.ferry.receiver.ui.StreamingScreen] reads it. */
     @Volatile var weakSignalBadgeEnabled = true
 
+    /**
+     * Mirrored from Settings → Picture & sound → Paused screen: the "Still connected" note, and the
+     * dim after a long pause. See [com.ferry.receiver.util.IdleScreen].
+     */
+    @Volatile var pausedScreenEnabled = true
+
+    /** When the viewer last pressed a remote button during a session (wall clock); lifts the dim. */
+    @Volatile var lastUserActivityMs = 0L
+
     /** Lateness that counts as the link struggling: well past jitter, into "you would see this". */
     private const val STRUGGLE_LATENESS_MS = 250L
 
@@ -224,7 +233,7 @@ object StreamStats {
         watchdogRecoveries = 0; watchdogLastReason = ""; watchdogLastMs = 0L
         videoWidth = 0; videoHeight = 0
         audioActive = false; audioQueue = 0; audioDupPct = 0; audioCatchUp = false
-        videoPlayoutDelayMs = 0; audioPlayoutDelayMs = 0; lastStruggleMs = 0L
+        videoPlayoutDelayMs = 0; audioPlayoutDelayMs = 0; lastStruggleMs = 0L; lastUserActivityMs = 0L
         // displayRefreshHz is NOT reset — it is a property of the TV, not of the stream, and
         // StreamingScreen only republishes it when a Surface is created.
     }

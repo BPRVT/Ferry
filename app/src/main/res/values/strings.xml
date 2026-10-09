@@ -140,6 +140,11 @@
     <string name="setting_force_screen_mirroring">Always mirror the screen</string>
     <string name="setting_force_screen_mirroring_subtitle">Stops apps opening their own player on the TV. Off = apps choose</string>
     <string name="setting_smart_fill">Smart fill</string>
+    <string name="setting_paused_screen">Paused screen</string>
+    <string name="setting_paused_screen_subtitle">When the picture is still, show that Ferry is still connected, and dim it after 5 minutes to protect the TV</string>
+    <!-- Paused-screen notes on the streaming screen (see util/IdleScreen). -->
+    <string name="paused_screen_connected">Still connected</string>
+    <string name="paused_screen_link_lost">Connection lost — start mirroring again on your device</string>
     <string name="setting_smart_fill_subtitle">Fill the screen, trimming a little off the edges. Off = show everything with black bars</string>
     <string name="setting_audio_boost">Audio boost</string>
     <string name="setting_audio_boost_subtitle">Make quiet sources louder. Off = play at the original level</string>

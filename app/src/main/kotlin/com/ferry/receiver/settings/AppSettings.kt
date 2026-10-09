@@ -211,6 +211,17 @@ data class AppSettings(
      */
     val smartFillEnabled: Boolean = true,
 
+    /**
+     * While the mirrored picture is still (a paused video, a static screen), show a small "Still
+     * connected" note with a pulsing dot after a few seconds, and dim the picture with the note
+     * drifting after five minutes so a paused frame cannot burn into the panel. Clears the moment
+     * the picture moves. See [com.ferry.receiver.util.IdleScreen].
+     *
+     * On by default: Ferry keeps the TV awake for the whole session, which also keeps the TV's own
+     * screensaver away, so without this a paused frame could sit unchanged for hours.
+     */
+    val pausedScreen: Boolean = true,
+
     // ─── Audio ─────────────────────────────────────────────────────────────
     /**
      * Extra playback gain in decibels, 0 (off) to [com.ferry.receiver.util.AudioGain.MAX_BOOST_DB].

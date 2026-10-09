@@ -323,6 +323,7 @@ class FerryService : Service() {
         com.ferry.receiver.airplay.StreamStats.smartFillEnabled = settings.smartFillEnabled
         com.ferry.receiver.airplay.StreamStats.audioBoostDb = settings.audioBoostDb
         com.ferry.receiver.airplay.StreamStats.weakSignalBadgeEnabled = settings.weakSignalBadge
+        com.ferry.receiver.airplay.StreamStats.pausedScreenEnabled = settings.pausedScreen
 
         // Idempotent: a redundant ACTION_START (e.g. the activity being recreated while the
         // foreground service is still alive) must NOT spin up a second AirPlayReceiver competing
