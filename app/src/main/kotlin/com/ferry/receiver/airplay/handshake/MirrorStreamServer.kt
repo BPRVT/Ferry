@@ -38,12 +38,6 @@ class MirrorStreamServer(
     private val surfaceProvider: () -> Surface?,
     private val width: Int = 1920,
     private val height: Int = 1080,
-    /**
-     * Called once when the video half of the session is dead beyond recovery — see [isStreamDead].
-     * The receiver ends the RTSP session so the sender stops believing it is still mirroring and
-     * re-establishes properly, with a fresh SETUP and fresh keys.
-     */
-    private val onStreamDead: () -> Unit = {},
 ) {
     private sealed class Item
     private class Config(val sps: ByteArray, val pps: ByteArray) : Item()
@@ -181,44 +175,23 @@ class MirrorStreamServer(
     /** Rebuild attempts this session, for the HUD's decoder state. */
     @Volatile private var decoderRebuilds = 0
 
-    /**
-     * State of the sender's data connection. Written by the reader thread, read by the watchdog.
-     *
-     * [everConnected] distinguishes "the sender has not connected yet", where being disconnected is
-     * the normal starting state, from "the sender connected and then went away", which is a fault.
-     */
-    @Volatile private var dataConnected = false
-    @Volatile private var everConnected = false
-    @Volatile private var dataClosedAtMs = 0L
-
-    /** So the session is only declared dead once, no matter how long the watchdog keeps ticking. */
-    @Volatile private var streamDeathReported = false
-
-    // ─── Sustained-degradation escalation (watchdog thread only) ─────────────────────────────
+    // ─── Watchdog bookkeeping (watchdog thread only) ──────────────────────────────────────────
     //
-    // Reported from hardware, and the observation that shaped this: **stopping and restarting the
-    // share acts like a fresh slate.** That is the single most informative thing anyone has said
-    // about this failure, because of what it rules out. If restarting the *session* fixes it, the
-    // thing that went wrong is inside the session — it is not the network degrading, not the SoC
-    // throttling, and not anything that would survive a fresh SETUP. And Ferry already knows how to
-    // do exactly what the user was doing by hand: ending the RTSP session makes the sender
-    // re-establish it, with fresh keys, a fresh decoder and an empty pipeline.
-    //
-    // So it does it itself now, rather than requiring somebody to notice and reach for the iPad.
-    //
-    // The bar is deliberately high, because a false positive tears down a working cast. Loss is
-    // measured over whole seconds and has to stay bad; the response escalates from the cheap remedy
-    // to the expensive one; and a recycle is rate-limited so a genuinely bad link degrades into
-    // "poor picture" rather than "a session that restarts every ten seconds", which would be worse
-    // than the problem.
+    // The watchdog only ever rebuilds the decoder. **It never ends the session.** 6.7.0 through 7.9.0
+    // had four rules that hung up on the sender — data socket closed, both streams silent, rebuilds
+    // not helping, sustained frame loss — and in practice they produced far more false positives
+    // than rescues. The worst one fired on every pause: iOS stops the audio stream when nothing is
+    // playing and sends no video while the screen is static, which is indistinguishable from a dead
+    // link, so pausing a video for eight seconds ended the cast and left a notice on the TV that had
+    // to be dismissed with the remote. Ending the session does not reliably bring the sender back
+    // either (7.8.0), so every mistake cost the whole cast. Whether a session is over is now decided
+    // by the sender alone — a TEARDOWN or the control connection closing.
     private var lastFramesIn = 0
     private var lastFramesShown = 0
     /** Consecutive watchdog rebuilds that did not put a single frame on screen. */
     private var consecutiveStallRebuilds = 0
-    private var lastResends = 0
     private var lastFramesLost = 0
     private var degradedTicks = 0
-    private var lastRecycleMs = 0L
     private var lastStatMs = 0L
     // Set by the reader thread when a frame is dropped under load; the decoder thread then skips
     // frames until the next keyframe (IDR) so it never decodes a reference-broken, corrupt stream.
@@ -278,8 +251,6 @@ class MirrorStreamServer(
         try {
             Logger.i("MirrorStreamServer listening on data port $dataPort")
             val socket = serverSocket.accept().also { client = it }
-            dataConnected = true
-            everConnected = true
             StreamStats.videoLinkUp = true
             Logger.i("Mirror data connection from ${socket.inetAddress.hostAddress}")
             // Hand the kernel room to hold a burst while the decoder catches up, and don't let
@@ -353,10 +324,9 @@ class MirrorStreamServer(
             // No second accept() either, deliberately. The AES-CTR keystream is bound to this data
             // connection, so a sender reconnecting to the same socket would decrypt to garbage —
             // visibly worse than the freeze. A genuine reconnect has to come through a fresh SETUP,
-            // which builds a new MirrorStreamServer with new keys, and that is what ending the
-            // session below asks the sender to do.
-            dataConnected = false
-            dataClosedAtMs = System.currentTimeMillis()
+            // which builds a new MirrorStreamServer with new keys. Ferry no longer forces that by
+            // ending the session itself (see the watchdog bookkeeping above); the HUD shows the link
+            // as down, and the sender's own TEARDOWN or disconnect ends the session.
             StreamStats.videoLinkUp = false
             Logger.w("Mirror data connection ended — video is dead until the session is re-established")
         }
@@ -494,10 +464,10 @@ class MirrorStreamServer(
      * socket, and nothing in the video path was watching itself — a decoder that stopped producing
      * simply stayed stopped, with the session still reporting CONNECTED to the UI and to the sender.
      *
-     * It deliberately does not tear the session down, only rebuild the decoder. A rebuild is cheap
-     * and recoverable; dropping a live session on a false positive is not, and the detector is new.
-     * If a rebuild does not fix it, the HUD says so — which is the honest outcome, since it means
-     * the fault is somewhere this cannot reach.
+     * It deliberately never tears the session down, only rebuilds the decoder. A rebuild is cheap
+     * and recoverable; dropping a live session on a false positive is not — and 6.7.0 through 7.9.0
+     * proved the false positives are real, ending casts every time a video was paused. If rebuilds
+     * do not fix it, the HUD says so and the viewer decides whether to restart the share.
      *
      * The recovery is requested through [forceRebuild] rather than performed here: [decoder] belongs
      * to the decoder thread, and reaching into it from this one would race a rebuild against a
@@ -510,52 +480,7 @@ class MirrorStreamServer(
             if (!running) break
             val now = System.currentTimeMillis()
 
-            // Rule 1: the video connection is gone. Rebuilding a decoder cannot help — there is
-            // nothing to decode — so end the session instead and let the sender re-establish it.
-            // This is the failure that was reported: iPad still playing, TV audio still playing,
-            // picture frozen on one frame, and Ferry still reporting CONNECTED to everyone.
-            if (Companion.isStreamDead(now, everConnected, dataConnected, dataClosedAtMs)) {
-                if (!streamDeathReported) {
-                    streamDeathReported = true
-                    StreamStats.watchdogRecoveries++
-                    StreamStats.watchdogLastReason = "video link lost"
-                    StreamStats.watchdogLastMs = now
-                    Logger.w("Watchdog: mirror data connection is gone — ending the session so the " +
-                        "sender re-establishes it")
-                    onStreamDead()
-                }
-                continue
-            }
-
-            // Rule 1a: both halves of the session have gone quiet while the socket is still open.
-            //
-            // **This is the failure that was captured on hardware.** The picture froze, the iPad went
-            // on playing, and Ferry sat there for twelve seconds until the user gave up and closed
-            // it. Neither existing rule could fire: the data socket never closed, so [isStreamDead]
-            // saw nothing wrong, and [isStalled] deliberately refuses to judge when no frames are
-            // arriving — because iOS sends video only on change, and a paused iPad is indistinguishable
-            // from a dead link if video is all you look at.
-            //
-            // Audio breaks that tie, and it is the signal Ferry has always had and never used.
-            // Realtime mirroring audio is not event-driven: it runs at a constant ~92 packets a
-            // second for as long as the session lives. In the captured log both streams stopped
-            // within a second of each other and never came back. A realtime stream that goes silent
-            // is not idling — it is gone.
-            if (Companion.isSessionSilent(now, StreamStats.audioLastArrivalMs, StreamStats.videoLastArrivalMs)) {
-                if (!streamDeathReported) {
-                    streamDeathReported = true
-                    StreamStats.watchdogRecoveries++
-                    StreamStats.watchdogLastReason = "session went silent"
-                    StreamStats.watchdogLastMs = now
-                    Logger.w("Watchdog: no audio for ${(now - StreamStats.audioLastArrivalMs)}ms and no " +
-                        "video for ${(now - StreamStats.videoLastArrivalMs)}ms, with the socket still " +
-                        "open — ending the session so the sender re-establishes it")
-                    onStreamDead()
-                }
-                continue
-            }
-
-            // Rule 1b: there is no Surface to draw to, so give the hardware decoder back.
+            // Rule 1: there is no Surface to draw to, so give the hardware decoder back.
             //
             // A MediaCodec is not an in-process object — it is one of a handful of AVC decoder
             // instances the whole device has, and on a stick that handful is very small. Holding one
@@ -567,9 +492,9 @@ class MirrorStreamServer(
             // is the ordinary shape of backgrounding Ferry mid-cast on a paused sender, which iOS
             // will happily leave in place for as long as the screen is static.
             //
-            // Sitting AHEAD of rule 2 matters just as much as what it does. With no Surface, "frames
+            // Sitting AHEAD of rule 3 matters just as much as what it does. With no Surface, "frames
             // are arriving and none is reaching the screen" is not a fault, it is the definition of
-            // the situation — so rule 2 used to match, every tick, for as long as the app stayed
+            // the situation — so rule 3 used to match, every tick, for as long as the app stayed
             // backgrounded with a live cast (which is what `receiveWhenClosed` is for). That is a
             // decoder rebuild every few seconds, forever, each one counted on the HUD as a watchdog
             // recovery from a stall that was never happening.
@@ -581,11 +506,6 @@ class MirrorStreamServer(
 
             // The displayed frame rate, sampled on the same one-second tick as everything else.
             // See StreamStats.videoShownFps for why this is the number that was missing.
-            // How hard the link is working to stay up, this second. See [shouldRecycleAfterStall].
-            val resendsNow = StreamStats.audioResendRequests
-            val resendsThisTick = (resendsNow - lastResends).coerceAtLeast(0)
-            lastResends = resendsNow
-
             val shownNow = StreamStats.videoShown
             StreamStats.videoShownFps = (shownNow - lastFramesShown).coerceAtLeast(0)
             // A frame reaching the screen is the only proof a rebuild worked, so it is the only
@@ -594,10 +514,10 @@ class MirrorStreamServer(
             if (shownNow > lastFramesShown) consecutiveStallRebuilds = 0
             lastFramesShown = shownNow
 
-            // Rule 1c: the pipeline is losing frames steadily. Escalate — rebuild, then recycle.
+            // Rule 2: the pipeline is losing frames steadily — rebuild the decoder once.
             if (checkSustainedLoss(now)) continue
 
-            // Rule 2: frames are arriving but none is reaching the screen — the decoder is wedged.
+            // Rule 3: frames are arriving but none is reaching the screen — the decoder is wedged.
             if (!Companion.isStalled(now, firstArrivalMs, StreamStats.videoLastArrivalMs, StreamStats.videoLastShownMs)) {
                 continue
             }
@@ -605,55 +525,40 @@ class MirrorStreamServer(
             // screen is to learn what went wrong even when the recovery works and nobody sees a
             // freeze. "decoder missing" and "decoder stuck" are different bugs.
             val reason = if (decoder == null) "decoder missing" else "decoder stuck"
+
+            // A rebuild that changed nothing means rebuilding is the wrong remedy — stop trying.
+            //
+            // **Reported from hardware: 179 rebuilds, one a second, for seven minutes**, after an
+            // iPad video was paused and resumed. A freshly built H.264 decoder has no reference
+            // picture, so it produces nothing until an IDR arrives — and every rebuild threw away
+            // the decoder that would otherwise have been waiting for one. 7.7.0 escalated to ending
+            // the session at this point, which cost the whole cast whenever it was wrong. Now the
+            // watchdog simply stands down and leaves the current decoder to resync on the sender's
+            // next keyframe. A frame reaching the screen resets the count above.
+            consecutiveStallRebuilds++
+            val attempts = consecutiveStallRebuilds
+            if (!Companion.shouldRebuildAfterStall(attempts)) {
+                // Said once, not every tick: standing down is a state, not a fresh event.
+                if (attempts == STALL_REBUILD_LIMIT + 1) {
+                    StreamStats.watchdogLastReason = "$reason — waiting for keyframe"
+                    Logger.w("Watchdog: ${attempts - 1} decoder rebuilds changed nothing ($reason) — " +
+                        "no more rebuilds until a frame is shown; waiting for the sender's next keyframe")
+                }
+                continue
+            }
             StreamStats.watchdogRecoveries++
             StreamStats.watchdogLastReason = reason
             StreamStats.watchdogLastMs = now
-
-            // A rebuild that changed nothing means rebuilding is the wrong remedy — escalate.
-            //
-            // **Reported from hardware, and the log is unambiguous: 179 rebuilds, one a second, for
-            // seven minutes.** The user paused an iPad video for several minutes and resumed it;
-            // audio came back, the picture stayed frozen on the paused frame, and this rule sat there
-            // rebuilding the decoder forever without ever escalating.
-            //
-            // It could not have worked, and the reason is worth stating exactly. A freshly built
-            // H.264 decoder has no reference picture, so it can produce **nothing at all** until an
-            // IDR arrives — and on a resume iOS may not send one for a very long time. Every frame
-            // arriving in the meantime is a P-frame predicting from pictures this decoder never had.
-            // So each rebuild produced a decoder in precisely the state that cannot recover, and the
-            // next tick built another one. `no keyframe for 3000ms — resuming decode` fired over and
-            // over in that log, which is this exact situation: feeding predicted frames to a codec
-            // that has no reference to predict from.
-            //
-            // Ending the session is the only remedy that reaches the cause, because a fresh SETUP
-            // makes the sender start a new stream — which begins with a keyframe. It is also exactly
-            // what the user does by hand when they stop and restart the share, and they have already
-            // confirmed that works.
-            consecutiveStallRebuilds++
-            val attempts = consecutiveStallRebuilds
-            if (Companion.shouldRecycleAfterStall(attempts, resendsThisTick, now, lastRecycleMs)) {
-                lastRecycleMs = now
-                consecutiveStallRebuilds = 0
-                StreamStats.watchdogLastReason = "$reason — session recycled"
-                // `attempts`, not the field: the field is reset a line above, and interpolating it
-                // here printed "0 decoder rebuilds changed nothing" in a real log — the one line
-                // whose entire job is to report how many attempts failed.
-                Logger.w("Watchdog: $attempts decoder rebuilds changed nothing ($reason) on a stable " +
-                    "link — a decoder with no keyframe cannot recover by being rebuilt. Ending the " +
-                    "session so the sender starts a new stream, which begins with one.")
-                onStreamDead()
-                continue
-            }
             Logger.w("Watchdog: no frame shown for ${(now - maxOf(StreamStats.videoLastShownMs, firstArrivalMs))}ms " +
                 "while frames are still arriving ($reason) — forcing a decoder rebuild " +
-                "(attempt $attempts of $STALL_REBUILDS_BEFORE_RECYCLE, " +
-                "${resendsThisTick} audio resends this second)")
+                "(attempt $attempts of $STALL_REBUILD_LIMIT)")
             forceRebuild = true
         }
     }
 
     /**
-     * Watches the *rate* at which frames are being destroyed, and escalates when it stays bad.
+     * Watches the *rate* at which frames are being destroyed, and rebuilds the decoder when it stays
+     * bad.
      *
      * Loss here means frames Ferry received and then could not use — shed at the queue, or refused
      * by the decoder for want of an input buffer. Each one costs picture until the sender's next
@@ -662,7 +567,7 @@ class MirrorStreamServer(
      * It deliberately does **not** count [StreamStats.videoRenderSkips]. A render skip is the
      * pacing rule working as designed — the frame was decoded, it just was not displayed, and the
      * picture is perfect. Confusing "deliberately not shown" with "destroyed" would make a healthy
-     * high-frame-rate stream look like a catastrophe and recycle a session that was fine, which is
+     * high-frame-rate stream look like a catastrophe and rebuild a decoder that was fine, which is
      * the exact class of confident-but-wrong fix this file has collected before.
      *
      * @return true if this tick was handled here and the remaining rules should be skipped.
@@ -685,32 +590,16 @@ class MirrorStreamServer(
         degradedTicks++
         val pct = if (arrived > 0) lost * 100 / arrived else 0
 
-        // Step 1, cheap: rebuild the decoder. Most of what lands here is a codec that has stopped
-        // handing back input buffers, and a fresh one costs about a second of picture.
+        // Rebuild the decoder, once per degraded episode. Most of what lands here is a codec that has
+        // stopped handing back input buffers, and a fresh one costs about a second of picture. There
+        // is deliberately no second step: through 7.9.0 this went on to end the whole session, which
+        // on a merely poor link turned a rough picture into a lost cast.
         if (degradedTicks == DEGRADED_REBUILD_TICKS) {
             Logger.w("Losing $pct% of frames for ${degradedTicks}s — rebuilding the decoder")
             StreamStats.watchdogRecoveries++
             StreamStats.watchdogLastReason = "frame loss $pct%"
             StreamStats.watchdogLastMs = nowMs
             forceRebuild = true
-            return true
-        }
-
-        // Step 2, drastic: recycle the whole session, which is what stopping and restarting the
-        // share does by hand. Only after the rebuild has been tried and has not helped.
-        if (degradedTicks >= DEGRADED_RECYCLE_TICKS &&
-            nowMs - lastRecycleMs >= RECYCLE_MIN_INTERVAL_MS
-        ) {
-            lastRecycleMs = nowMs
-            degradedTicks = 0
-            StreamStats.watchdogRecoveries++
-            StreamStats.watchdogLastReason = "session recycled ($pct% loss)"
-            StreamStats.watchdogLastMs = nowMs
-            Logger.w("Still losing $pct% of frames after a decoder rebuild — ending the session so " +
-                "the sender re-establishes it (the automatic equivalent of stopping and restarting " +
-                "the share)")
-            onStreamDead()
-            return true
         }
         return true
     }
@@ -734,8 +623,7 @@ class MirrorStreamServer(
      *
      * There is deliberately no give-up count. These failures are overwhelmingly transient, and a
      * ceiling would only reintroduce the original bug on a longer timer — a session that exhausted
-     * it would be just as permanently frozen. The session already has an owner that ends it: the
-     * reader thread, when the sender closes the socket.
+     * it would be just as permanently frozen. Ending the session belongs to the sender.
      */
     private fun runDecoder() {
         try {
@@ -1169,30 +1057,15 @@ class MirrorStreamServer(
         /** Fraction of arriving frames destroyed, in one tick, for that tick to count as degraded. */
         private const val DEGRADED_LOSS_PCT = 20
 
-        /** Consecutive degraded seconds before the cheap remedy: rebuild the decoder. */
+        /** Consecutive degraded seconds before the decoder is rebuilt. */
         private const val DEGRADED_REBUILD_TICKS = 5
-
-        /** Consecutive degraded seconds before the drastic one: recycle the whole session. */
-        private const val DEGRADED_RECYCLE_TICKS = 15
-
-        /**
-         * Floor on how often a session may be recycled.
-         *
-         * A recycle costs a visible reconnection, so on a link that is genuinely too poor to carry
-         * the stream this has to settle into "degraded picture" rather than a reconnect loop — which
-         * would be strictly worse than the problem it is treating. One minute is long enough that a
-         * user sees at most a brief interruption, and short enough to still rescue a session that
-         * went bad early in a long cast.
-         */
-        private const val RECYCLE_MIN_INTERVAL_MS = 60_000L
 
         /**
          * Whether one watchdog tick's worth of traffic counts as degraded.
          *
-         * Pure, `internal` and in the companion so the escalation policy is unit-testable without a
-         * socket or a codec — the same treatment [isStalled] and [waitBudgetMs] get, and for the
-         * same reason: its failure mode (tearing down a healthy session) is destructive and cannot
-         * be staged on a TV.
+         * Pure, `internal` and in the companion so the policy is unit-testable without a socket or a
+         * codec — the same treatment [isStalled] and [waitBudgetMs] get, and for the same reason:
+         * it is timing-dependent and cannot be staged on a TV.
          *
          * @param arrived frames received in this tick.
          * @param lost of those, how many were shed at the queue or refused by the decoder.
@@ -1204,135 +1077,24 @@ class MirrorStreamServer(
         }
 
         /**
-         * Grace period after the data connection drops before the session is declared dead.
+         * How many fruitless decoder rebuilds the stall rule makes before standing down.
          *
-         * Short, because there is nothing to wait for — no second accept() is coming (see
-         * [runReader]) — but not zero, so an orderly teardown that closes the data socket a moment
-         * before the control connection does not race into an unnecessary "session died" report.
+         * Large enough that a rebuild which genuinely needed a moment (the codec settling, a
+         * keyframe a second away) is not cut off before it can work; bounded because a rebuild that
+         * did not produce a frame is *evidence the remedy is wrong*, and the observed failure ran
+         * 179 of them. Past this the watchdog leaves the current decoder alone to resync on the
+         * sender's next keyframe — it never ends the session.
          */
-        private const val LINK_DEAD_GRACE_MS = 2_000L
+        internal const val STALL_REBUILD_LIMIT = 15
 
         /**
-         * Whether the video half of this session is dead beyond recovery, so the session should be
-         * ended and the sender made to re-establish it.
+         * Whether the stall rule should force another decoder rebuild.
          *
-         * The trigger is **the data socket having actually closed**, and nothing else. That
-         * narrowness is the whole design.
-         *
-         * The tempting alternative — "no frames have arrived for N seconds" — is unusable here, and
-         * would be a worse bug than the one being fixed. iOS sends frames only when the screen
-         * changes, so a paused video or a still menu produces no frames indefinitely while the
-         * session is perfectly healthy. A timeout on arrivals would tear down a working cast every
-         * time the user paused, which is exactly the sort of confident, wrong fix this file has
-         * collected before. A closed socket is not ambiguous: the stream is gone.
-         *
-         * @param everConnected false before the sender has ever connected, when "disconnected" is
-         *   merely the starting state and means nothing.
+         * @param consecutiveRebuilds rebuilds forced so far without a frame reaching the screen,
+         *   counting the one being considered.
          */
-        internal fun isStreamDead(
-            nowMs: Long,
-            everConnected: Boolean,
-            dataConnected: Boolean,
-            dataClosedAtMs: Long,
-        ): Boolean {
-            if (!everConnected || dataConnected) return false
-            if (dataClosedAtMs <= 0L) return false
-            return nowMs - dataClosedAtMs >= LINK_DEAD_GRACE_MS
-        }
-
-        /**
-         * How long both streams must be silent before the session counts as dead.
-         *
-         * Generous, because the cost of being wrong is a visible reconnection. Realtime audio arrives
-         * about ninety times a second, so eight seconds of nothing is roughly seven hundred missing
-         * packets — not jitter, not a hiccup, and not a link that is coming back. The user in the
-         * captured incident waited twelve seconds before giving up, so this recovers the session
-         * before a person would have reached for the remote.
-         */
-        private const val SESSION_SILENT_MS = 8_000L
-
-        /**
-         * How many fruitless decoder rebuilds to accept before ending the session instead.
-         *
-         * Small, because a rebuild that did not produce a frame is *evidence the remedy is wrong*,
-         * not an attempt that needs more patience — and the observed failure ran 179 of them. Large
-         * enough that a rebuild which genuinely needed a moment (the codec settling, a keyframe a
-         * second away) is not cut off before it can work.
-         */
-        private const val STALL_REBUILDS_BEFORE_RECYCLE = 15
-
-        /**
-         * Audio resend requests in one second above which the **link** is considered to be in
-         * trouble, and the session must not be torn down.
-         *
-         * A resend request means a gap the sender's own 3× redundancy failed to cover, so it takes
-         * real loss. A healthy session sits at zero for minutes on end. Three a second is far above
-         * the noise floor and far below what a genuine storm produces — the captured failure ran at
-         * roughly 6–13 a second.
-         */
-        private const val RESEND_DISTRESS_PER_SECOND = 3
-
-        /**
-         * Whether repeated failed rebuilds should escalate to ending the session.
-         *
-         * **Two things learned from hardware shape this, and both make it more reluctant.**
-         *
-         * First, the cost of being wrong is far higher than 7.7.0 assumed. Ending the session does
-         * *not* reliably bring the sender back (see `ui/NoticeScreen`), so a mistaken recycle does
-         * not cost a brief reconnection — it costs the whole cast, until somebody picks up a device
-         * and starts it again.
-         *
-         * Second, and the reason for [resendsThisSecond]: a captured log shows this firing during a
-         * **network storm**. Audio resend requests went from 1 to 64 in ten seconds, the audio queue
-         * slammed between full and empty, and the picture froze — and ten seconds later Ferry killed
-         * a session that might well have recovered on its own once the Wi-Fi settled. A frozen
-         * picture on a *struggling* link is a symptom; a frozen picture on a *quiet* link is a wedged
-         * decoder. Only the second is something a new session can fix, and only the second is worth
-         * a cast for.
-         *
-         * So: fifteen failed rebuilds rather than five, and never while the link is visibly fighting.
-         * A wedged decoder is not time-limited — waiting longer costs a longer freeze and nothing
-         * else — whereas a network event is, and outliving it is the entire point.
-         *
-         * Shares [RECYCLE_MIN_INTERVAL_MS] with the frame-loss path deliberately: both end in the
-         * same visible reconnection, so a link bad enough to trigger both must still not produce one
-         * reconnect after another. Pure and `internal` so the escalation policy is testable without a
-         * TV — it tears down live sessions, which is the same bar every other rule here is held to.
-         */
-        internal fun shouldRecycleAfterStall(
-            consecutiveRebuilds: Int,
-            resendsThisSecond: Int,
-            nowMs: Long,
-            lastRecycleMs: Long,
-        ): Boolean {
-            if (consecutiveRebuilds < STALL_REBUILDS_BEFORE_RECYCLE) return false
-            // Never tear down a session while the link is visibly struggling. See the KDoc.
-            if (resendsThisSecond >= RESEND_DISTRESS_PER_SECOND) return false
-            return nowMs - lastRecycleMs >= RECYCLE_MIN_INTERVAL_MS
-        }
-
-        /**
-         * Whether **both** halves of the session have gone quiet, with the socket still open.
-         *
-         * Requires audio to have arrived at least once ([audioLastArrivalMs] non-zero). That is the
-         * guard that keeps this honest: with no audio stream there is no heartbeat, video silence
-         * alone means nothing, and this must return false rather than guess. It is exactly the
-         * ambiguity that made a timeout unusable in 6.7.0 — the difference now is that audio supplies
-         * the missing half, not that the reasoning about video changed.
-         *
-         * Pure, `internal` and in the companion for the same reason as [isStalled] and
-         * [isStreamDead]: it tears down live sessions, so it must be testable without a TV.
-         */
-        internal fun isSessionSilent(
-            nowMs: Long,
-            audioLastArrivalMs: Long,
-            videoLastArrivalMs: Long,
-        ): Boolean {
-            if (audioLastArrivalMs <= 0L) return false          // no audio stream — no heartbeat
-            if (videoLastArrivalMs <= 0L) return false          // nothing ever arrived; not our case
-            return nowMs - audioLastArrivalMs >= SESSION_SILENT_MS &&
-                nowMs - videoLastArrivalMs >= SESSION_SILENT_MS
-        }
+        internal fun shouldRebuildAfterStall(consecutiveRebuilds: Int): Boolean =
+            consecutiveRebuilds <= STALL_REBUILD_LIMIT
 
         /**
          * Whether the video path looks wedged: frames arriving, nothing reaching the screen.

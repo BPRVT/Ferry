@@ -11,6 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [8.0.0] - 2026-10-09
+
+Pause a video and Ferry ended the cast. Ferry no longer ends sessions on its own.
+
+### Fixed
+
+- **Pausing a video ended the session.** When nothing is playing, iOS stops the mirroring audio
+  stream, and a static screen sends no video. 7.5.0's silence rule could not tell that apart from
+  a dead link: eight seconds into a pause it hung up on the sender and put "Mirroring stopped —
+  press any key to dismiss" on the television. The cast was gone, and had to be dismissed with the
+  remote and started again by hand.
+
+### Removed
+
+- **Every rule that ended the session on Ferry's behalf.** Four of them, added between 6.7.0 and
+  7.9.0: the data connection closing, both streams going silent, decoder rebuilds not helping, and
+  sustained frame loss. Each was tuned to avoid false positives and each still produced them. Since
+  7.8.0 we have known that ending the session does not reliably bring the sender back, so every
+  false positive cost the whole cast. Whether a session is over is now decided by the sender alone,
+  through a TEARDOWN or by closing the connection.
+- **The "Mirroring stopped" notice**, which existed only to explain those teardowns.
+- The audio-arrival and resend-request signals, which only fed those rules.
+
+### Changed
+
+- The stall watchdog still rebuilds a wedged decoder, but stops after 15 rebuilds that put no
+  frame on screen. It then leaves the decoder to resync on the sender's next keyframe instead of
+  escalating. Showing a frame resets the count. Sustained frame loss rebuilds the decoder once per
+  episode.
+- If the link really does die, the picture now stays frozen until you stop and restart the share.
+  The debug overlay still shows the video link as `down`.
+
+---
+
 ## [7.9.0] - 2026-08-07
 
 7.7.0's escalation fired exactly as designed, and the log shows it was wrong to fire.

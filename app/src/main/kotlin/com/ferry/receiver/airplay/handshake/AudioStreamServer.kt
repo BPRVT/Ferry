@@ -214,10 +214,6 @@ class AudioStreamServer(
                 packet.length = buf.size      // reset capacity — receive() shrinks length to the last datagram
                 socket.receive(packet)
                 recv++
-                // Timestamp every arrival, including duplicates: the question the watchdog asks is
-                // "is this link carrying anything at all", and a duplicate proves that as well as a
-                // unique packet does.
-                StreamStats.audioLastArrivalMs = System.currentTimeMillis()
                 if (rtpCount < 6) {
                     Logger.i("Audio RTP[$rtpCount] ${packet.length}B hdr: ${hex(packet.data, minOf(20, packet.length))}")
                     rtpCount++
@@ -316,7 +312,6 @@ class AudioStreamServer(
             req[6] = (count ushr 8).toByte();      req[7] = count.toByte()
             resendCtr = (resendCtr + 1) and 0xFFFF
             resendReqCount++
-            StreamStats.audioResendRequests = resendReqCount
             runCatching { controlSocket.send(DatagramPacket(req, req.size, addr)) }
         }
     }

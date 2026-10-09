@@ -43,7 +43,7 @@ worth naming:
 | Area | Change |
 |---|---|
 | **Screensaver** | The Fire TV screensaver no longer interrupts an active session. This is why the project exists. [Details below.](#the-screensaver-fix) |
-| **Self-recovery** | A stall watchdog, automatic decoder rebuilds, and — when sustained frame loss survives that — recycling the session so the sender re-establishes it. Crashes and main-thread freezes are recorded and shown on the TV at the next launch, because the device has no adb. |
+| **Self-recovery** | A stall watchdog and automatic decoder rebuilds. Ferry never ends a session on its own — only the sender does — so a paused video can sit for as long as you like. Crashes and main-thread freezes are recorded and shown on the TV at the next launch, because the device has no adb. |
 | **Video pipeline** | Asynchronous MediaCodec decode, realtime codec priority, low-latency mode, dedicated display-priority threads, a shallow bounded frame queue that sheds non-reference frames first, in-place AVCC→Annex-B conversion, and pooled buffers on both sides of the decrypt. Latency and GC pressure, both reduced deliberately. |
 | **Picture** | Smart fill (crop a capped slice instead of showing black bars), and a resolution choice — 720p for smoothness, 1080p, or 1440p for sharper text. |
 | **Audio** | Correct dB→amplitude volume mapping, volume on the legacy RAOP path, and an optional compressing loudness boost for quiet sources. |
@@ -97,7 +97,7 @@ Network**.
 
 ```bash
 adb connect 192.168.1.42:5555
-adb install -r ferry-v7.9.0-firetv.apk
+adb install -r ferry-v8.0.0-firetv.apk
 ```
 
 Accept the authorization prompt on the TV the first time. Then launch **Ferry** from the
@@ -296,7 +296,7 @@ observation rather than by trusting a source review.
 | Audio boost | Off | Up to +12 dB of compressing gain for quiet sources. |
 | Keep receiving when closed | **Off** | Stay visible to senders after you leave Ferry. Off means Ferry only receives while it is open — see [Security](#security). |
 | Start on boot | Off | Launch the receiver when the TV starts. Implies "Keep receiving when closed". |
-| Debug overlay | Off | On-screen HUD: pipeline state and counters — decoder status, frames shown, time since the last frame arrived and was displayed, plus any watchdog recoveries. |
+| Debug overlay | Off | On-screen HUD: pipeline state and counters — decoder status, frames shown, time since the last frame arrived and was displayed, plus any watchdog decoder rebuilds. |
 
 ---
 
